@@ -6,7 +6,7 @@ import { useBuilding } from '../store'
 const FLOOR_HEIGHT = 3.5
 
 export function useFloorAnalyser(meshes: THREE.Mesh[]): Floor[] {
-  const setBuilding = useBuilding((s) => s.setBuilding)
+  const { setBuilding } = useBuilding()
 
   const floors = useMemo<Floor[]>(() => {
     if (meshes.length === 0) return []
