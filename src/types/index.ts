@@ -29,3 +29,9 @@ export interface DeviceMeta {
   defaultRotation: [number, number, number]
   mountHint: MountType[]
 }
+
+export interface HoverInfo {
+  floorName: string
+  heightM: number
+  mountType: MountType
+}

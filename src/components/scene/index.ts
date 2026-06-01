@@ -1,1 +1,1 @@
-export {}
+export { BuildingLoader } from './BuildingLoader'
