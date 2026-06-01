@@ -1,5 +1,6 @@
 import { create } from 'zustand'
 import { immer } from 'zustand/middleware/immer'
+import { useShallow } from 'zustand/react/shallow'
 import type { Floor, PlacedDevice, DeviceId } from '../types'
 
 // ── Slices ────────────────────────────────────────────────────────────────────
@@ -86,27 +87,27 @@ export const useStore = create<Store>()(
 // ── Selectors ─────────────────────────────────────────────────────────────────
 
 export const useBuilding = () =>
-  useStore((s) => ({
+  useStore(useShallow((s) => ({
     buildingLoaded: s.buildingLoaded,
     floors: s.floors,
     setBuilding: s.setBuilding,
     clearBuilding: s.clearBuilding,
-  }))
+  })))
 
 export const useDevices = () =>
-  useStore((s) => ({
+  useStore(useShallow((s) => ({
     placedDevices: s.placedDevices,
     selectedId: s.selectedId,
     addDevice: s.addDevice,
     updateDevice: s.updateDevice,
     removeDevice: s.removeDevice,
     selectDevice: s.selectDevice,
-  }))
+  })))
 
 export const useUI = () =>
-  useStore((s) => ({
+  useStore(useShallow((s) => ({
     activeDeviceType: s.activeDeviceType,
     showHeightLines: s.showHeightLines,
     setActiveDeviceType: s.setActiveDeviceType,
     toggleHeightLines: s.toggleHeightLines,
-  }))
+  })))

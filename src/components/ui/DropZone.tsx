@@ -6,7 +6,7 @@ interface DropZoneProps {
 }
 
 export function DropZone({ onFile }: DropZoneProps) {
-  const buildingLoaded = useBuilding((s) => s.buildingLoaded)
+  const { buildingLoaded } = useBuilding()
 
   useEffect(() => {
     const handleDragOver = (e: DragEvent) => e.preventDefault()
