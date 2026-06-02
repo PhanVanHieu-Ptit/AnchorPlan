@@ -4,6 +4,7 @@ import AppLayout from './components/ui/AppLayout'
 import { DropZone } from './components/ui/DropZone'
 import { DeviceCatalogue } from './components/ui/DeviceCatalogue'
 import { HoverTooltip } from './components/ui/HoverTooltip'
+import Toolbar from './components/ui/Toolbar'
 import Scene3D from './components/scene/Scene3D'
 import { useModelLoader, useFloorAnalyser } from './hooks'
 import type { HoverInfo } from './hooks'
@@ -24,7 +25,7 @@ export default function App() {
   }, [])
 
   return (
-    <AppLayout catalogue={<DeviceCatalogue />}>
+    <AppLayout catalogue={<DeviceCatalogue />} toolbar={<Toolbar />}>
       <div className="relative w-full h-full" onMouseMove={handleMouseMove}>
         <Scene3D
           glbUrl={glbUrl}
