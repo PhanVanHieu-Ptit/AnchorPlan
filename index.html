@@ -1,13 +1,474 @@
-<!doctype html>
+<!DOCTYPE html>
 <html lang="en">
-  <head>
-    <meta charset="UTF-8" />
-    <link rel="icon" type="image/svg+xml" href="/vite.svg" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>devmount</title>
-  </head>
-  <body>
-    <div id="root"></div>
-    <script type="module" src="/src/main.tsx"></script>
-  </body>
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>AnchorPlan</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body { overflow: hidden; background: #1a1a2e; }
+    #toolbar {
+      position: fixed; top: 0; left: calc((100% - 268px) / 2); transform: translateX(-50%);
+      display: flex; flex-direction: row; gap: 8px;
+      background: rgba(10,10,30,0.88); padding: 8px 14px;
+      border-radius: 0 0 10px 10px; z-index: 20; pointer-events: auto;
+    }
+    .type-btn {
+      display: flex; align-items: center; gap: 6px;
+      padding: 5px 10px; border-radius: 6px; border: 1.5px solid transparent;
+      cursor: pointer; color: #fff; font-size: 12px; background: transparent;
+    }
+    #sidebar {
+      position: fixed; right: 0; top: 0;
+      width: 268px; height: 100vh; overflow-y: auto;
+      background: #12121f; color: #fff;
+      font-size: 13px; padding: 14px;
+      font-family: system-ui; z-index: 15;
+      box-sizing: border-box;
+    }
+    .device-row:hover { background: rgba(255,255,255,0.05); }
+    .del-btn:hover { opacity: 0.9 !important; }
+  </style>
+
+  <script type="importmap">
+  {
+    "imports": {
+      "three": "https://cdn.jsdelivr.net/npm/three@0.169.0/build/three.module.js",
+      "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.169.0/examples/jsm/"
+    }
+  }
+  </script>
+
+  <script type="module">
+    import * as THREE from 'three';
+    import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+    import { CSS2DRenderer, CSS2DObject } from 'three/addons/renderers/CSS2DRenderer.js';
+
+    document.addEventListener('DOMContentLoaded', () => {
+
+      // ── RENDERER ──
+      const SIDEBAR_W = 268;
+      const canvasW = () => window.innerWidth - SIDEBAR_W;
+
+      const renderer = new THREE.WebGLRenderer({ antialias: true });
+      renderer.setPixelRatio(window.devicePixelRatio);
+      renderer.setSize(canvasW(), window.innerHeight);
+      document.body.appendChild(renderer.domElement);
+
+      const css2dRenderer = new CSS2DRenderer();
+      css2dRenderer.setSize(canvasW(), window.innerHeight);
+      css2dRenderer.domElement.style.position = 'absolute';
+      css2dRenderer.domElement.style.top = '0';
+      css2dRenderer.domElement.style.left = '0';
+      css2dRenderer.domElement.style.pointerEvents = 'none';
+      document.body.appendChild(css2dRenderer.domElement);
+
+      window.addEventListener('resize', () => {
+        camera.aspect = canvasW() / window.innerHeight;
+        camera.updateProjectionMatrix();
+        renderer.setSize(canvasW(), window.innerHeight);
+        css2dRenderer.setSize(canvasW(), window.innerHeight);
+      });
+
+
+      // ── SCENE ──
+      const scene = new THREE.Scene();
+      scene.background = new THREE.Color(0x1a1a2e);
+
+      const ambientLight = new THREE.AmbientLight(0xffffff, 0.55);
+      scene.add(ambientLight);
+
+      const dirLight = new THREE.DirectionalLight(0xffffff, 0.9);
+      dirLight.position.set(12, 20, 10);
+      scene.add(dirLight);
+
+
+      // ── CAMERA ──
+      const camera = new THREE.PerspectiveCamera(50, canvasW() / window.innerHeight, 0.1, 1000);
+      camera.position.set(20, 26, 20);
+      camera.lookAt(0, 10, 0);
+
+      const controls = new OrbitControls(camera, renderer.domElement);
+      controls.enableDamping = true;
+      controls.dampingFactor = 0.08;
+
+
+      // ── BUILDING ──
+      const FLOORS = 10;
+      const FLOOR_HEIGHT = 3.2;
+      const SLAB_H = 0.28;
+      const wallH = FLOOR_HEIGHT - SLAB_H;
+
+      window.floors = [];
+
+      // ── DEVICE TYPES ──
+      const DEVICE_TYPES = [
+        { id:'camera', label:'Camera',     color:'#378ADD', geo:'box',    icon:'📷' },
+        { id:'sensor', label:'Sensor',     color:'#1D9E75', geo:'sphere', icon:'🌡' },
+        { id:'ac',     label:'AC Unit',    color:'#888780', geo:'box',    icon:'❄'  },
+        { id:'alarm',  label:'Fire Alarm', color:'#E24B4A', geo:'sphere', icon:'🔔' },
+      ];
+      let activeTypeId = 'camera';
+      let deviceIdCounter = 1;
+      window.devices = [];
+
+      for (let i = 0; i < FLOORS; i++) {
+        const slabGeo = new THREE.BoxGeometry(12, SLAB_H, 9);
+        const slabMat = new THREE.MeshLambertMaterial({
+          color: i % 2 === 0 ? 0x2a2a3e : 0x252535,
+        });
+        const slab = new THREE.Mesh(slabGeo, slabMat);
+        slab.position.y = i * FLOOR_HEIGHT + SLAB_H / 2;
+        slab.userData = { type: 'slab', floorIndex: i };
+        scene.add(slab);
+
+        const wallMat = new THREE.MeshLambertMaterial({
+          color: 0x1e1e30,
+          transparent: true,
+          opacity: 0.82,
+        });
+        const wallY = i * FLOOR_HEIGHT + SLAB_H + wallH / 2;
+        const wallDefs = [
+          { geo: new THREE.BoxGeometry(12,   wallH, 0.18), x:  0,  z: +4.5 },
+          { geo: new THREE.BoxGeometry(12,   wallH, 0.18), x:  0,  z: -4.5 },
+          { geo: new THREE.BoxGeometry(0.18, wallH, 9),    x: -6,  z:  0   },
+          { geo: new THREE.BoxGeometry(0.18, wallH, 9),    x: +6,  z:  0   },
+        ];
+        const walls = wallDefs.map(({ geo, x, z }) => {
+          const wall = new THREE.Mesh(geo, wallMat);
+          wall.position.set(x, wallY, z);
+          scene.add(wall);
+          return wall;
+        });
+
+        window.floors[i] = { index: i, slab, walls, devices: [] };
+      }
+
+
+      // ── SELECTION STATE ──
+      let selectedFloor = null;
+      let hoveredSlab = null;
+
+      const SLAB_COLOR_DEFAULT  = [0x2a2a3e, 0x252535];
+      const SLAB_COLOR_SELECTED = 0x1a3a5c;
+      const SLAB_COLOR_HOVER    = 0x222244;
+
+      const raycaster = new THREE.Raycaster();
+      const mouse     = new THREE.Vector2();
+
+      function getSlabMeshes() {
+        return window.floors.map(f => f.slab);
+      }
+
+
+      // ── HUD ──
+      const hud = document.createElement('div');
+      hud.id = 'hud';
+      Object.assign(hud.style, {
+        position: 'fixed', top: '1rem', left: '1rem',
+        width: '200px', background: 'rgba(10,10,30,0.82)',
+        color: '#fff', fontSize: '12px', padding: '1rem',
+        pointerEvents: 'none', zIndex: '10', fontFamily: 'monospace',
+        borderRadius: '6px', lineHeight: '1.6',
+      });
+      document.body.appendChild(hud);
+
+      function updateHUD() {
+        const f     = selectedFloor;
+        const count = f !== null ? window.floors[f].devices.length : '—';
+        hud.innerHTML = `
+          <div style="margin-bottom:8px;font-size:14px;font-weight:bold">BUILDING MANAGER</div>
+          <div>Selected: ${f !== null ? 'Floor ' + (f + 1) : '—'}</div>
+          <div>Devices on floor: ${count}</div>
+          <div>Total: ${window.devices?.length ?? 0}</div>
+        `;
+      }
+      updateHUD();
+
+
+      // ── TOOLBAR ──
+      const toolbar = document.createElement('div');
+      toolbar.id = 'toolbar';
+      document.body.appendChild(toolbar);
+
+      function refreshToolbar() {
+        toolbar.querySelectorAll('.type-btn').forEach(btn => {
+          const type = DEVICE_TYPES.find(t => t.id === btn.dataset.typeId);
+          if (btn.dataset.typeId === activeTypeId) {
+            btn.style.border = `1.5px solid ${type.color}`;
+            btn.style.background = hexToRgba(type.color, 0.15);
+          } else {
+            btn.style.border = '1.5px solid transparent';
+            btn.style.background = 'transparent';
+          }
+        });
+      }
+
+      function hexToRgba(hex, alpha) {
+        const r = parseInt(hex.slice(1,3),16);
+        const g = parseInt(hex.slice(3,5),16);
+        const b = parseInt(hex.slice(5,7),16);
+        return `rgba(${r},${g},${b},${alpha})`;
+      }
+
+      DEVICE_TYPES.forEach(type => {
+        const btn = document.createElement('button');
+        btn.className = 'type-btn';
+        btn.dataset.typeId = type.id;
+        btn.innerHTML = `<span style="width:9px;height:9px;border-radius:50%;background:${type.color};display:inline-block;flex-shrink:0"></span>${type.icon} ${type.label}`;
+        btn.addEventListener('click', () => {
+          activeTypeId = type.id;
+          refreshToolbar();
+        });
+        toolbar.appendChild(btn);
+      });
+
+      refreshToolbar();
+
+      // ── SIDEBAR DOM ──
+      const sidebar = document.createElement('div');
+      sidebar.id = 'sidebar';
+      sidebar.innerHTML = `
+        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px">
+          <span style="font-size:14px;font-weight:600">Devices</span>
+          <span id="total-badge" style="background:#2a2a3e;color:#378ADD;font-size:11px;padding:2px 8px;border-radius:10px">0</span>
+        </div>
+        <div style="display:flex;gap:12px;margin:10px 0;font-size:11px;color:#aaa">
+          <span>🟢 <span id="stat-online">0</span> online</span>
+          <span>🟡 <span id="stat-warning">0</span> warning</span>
+          <span>🔴 <span id="stat-offline">0</span> offline</span>
+        </div>
+        <hr style="border:none;border-top:1px solid #2a2a3e;margin:10px 0">
+        <div id="device-list"></div>
+        <div id="empty-state" style="color:#555;text-align:center;margin-top:40px;line-height:1.8">
+          <div>No devices yet</div>
+          <div style="font-size:11px">Shift+click a floor to place one</div>
+        </div>
+      `;
+      document.body.appendChild(sidebar);
+
+      // ── FLOOR SELECTION FROM SIDEBAR ──
+      function selectFloorInScene(i) {
+        if (selectedFloor !== null)
+          window.floors[selectedFloor].slab.material.color
+            .setHex(SLAB_COLOR_DEFAULT[selectedFloor % 2]);
+        selectedFloor = i;
+        window.floors[i].slab.material.color.setHex(SLAB_COLOR_SELECTED);
+        hoveredSlab = null;
+        updateHUD();
+      }
+
+      // ── DELETE DEVICE ──
+      function deleteDevice(id) {
+        const idx = window.devices.findIndex(d => d.id === id);
+        if (idx === -1) return;
+        const dev = window.devices[idx];
+        dev.mesh.remove(dev.labelObj);
+        scene.remove(dev.mesh);
+        dev.mesh.geometry.dispose();
+        dev.mesh.material.dispose();
+        window.devices.splice(idx, 1);
+        const floor = window.floors[dev.floorIndex];
+        const fi = floor.devices.indexOf(id);
+        if (fi !== -1) floor.devices.splice(fi, 1);
+        updateSidebar();
+        updateHUD();
+      }
+
+      // ── PULSE DEVICE ──
+      function pulseDevice(id) {
+        const dev = window.devices.find(d => d.id === id);
+        if (!dev) return;
+        const mesh = dev.mesh;
+        const duration = 350;
+        const start = performance.now();
+        function tick(now) {
+          const t = Math.min((now - start) / duration, 1);
+          const s = t < 0.5 ? 1 + 0.8 * (t * 2) : 1 + 0.8 * (2 - t * 2);
+          mesh.scale.setScalar(s);
+          if (t < 1) requestAnimationFrame(tick);
+          else mesh.scale.setScalar(1);
+        }
+        requestAnimationFrame(tick);
+      }
+
+      // ── SIDEBAR UPDATE ──
+      function updateSidebar() {
+        const list       = document.getElementById('device-list');
+        const emptyState = document.getElementById('empty-state');
+        const totalBadge = document.getElementById('total-badge');
+        const statOnline  = document.getElementById('stat-online');
+        const statWarning = document.getElementById('stat-warning');
+        const statOffline = document.getElementById('stat-offline');
+        if (!list) return;
+
+        let online = 0, warning = 0, offline = 0;
+        window.devices.forEach(d => {
+          if (d.status === 'online') online++;
+          else if (d.status === 'warning') warning++;
+          else offline++;
+        });
+        totalBadge.textContent  = window.devices.length;
+        statOnline.textContent  = online;
+        statWarning.textContent = warning;
+        statOffline.textContent = offline;
+
+        list.innerHTML = '';
+        if (window.devices.length === 0) {
+          emptyState.style.display = 'block';
+          return;
+        }
+        emptyState.style.display = 'none';
+
+        const byFloor = {};
+        window.devices.forEach(d => {
+          if (!byFloor[d.floorIndex]) byFloor[d.floorIndex] = [];
+          byFloor[d.floorIndex].push(d);
+        });
+
+        Object.keys(byFloor).sort((a, b) => a - b).forEach(fi => {
+          const floorDevices = byFloor[fi];
+          const header = document.createElement('div');
+          header.style.cssText = 'font-size:11px;opacity:.5;margin-top:12px;margin-bottom:4px;text-transform:uppercase;letter-spacing:.5px';
+          header.textContent = `Floor ${parseInt(fi) + 1}  (${floorDevices.length})`;
+          list.appendChild(header);
+
+          floorDevices.forEach(dev => {
+            const type = DEVICE_TYPES.find(t => t.id === dev.typeId);
+            const statusColor = dev.status === 'online'  ? '#1D9E75'
+                              : dev.status === 'warning' ? '#E2A84B' : '#E24B4A';
+            const row = document.createElement('div');
+            row.className = 'device-row';
+            row.style.cssText = 'display:flex;align-items:center;gap:8px;padding:6px 8px;border-radius:6px;cursor:pointer;transition:background 0.15s';
+            row.innerHTML = `
+              <span style="width:8px;height:8px;border-radius:50%;background:${type.color};flex-shrink:0"></span>
+              <span style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">
+                ${type.icon} ${type.label} <span style="color:#555;font-size:11px">#${dev.id}</span>
+              </span>
+              <span style="width:10px;height:10px;border-radius:50%;background:${statusColor};flex-shrink:0"></span>
+              <button class="del-btn" style="background:none;border:none;color:#fff;font-size:14px;cursor:pointer;opacity:.4;padding:0 2px;line-height:1" title="Delete">🗑</button>
+            `;
+            row.querySelector('.del-btn').addEventListener('click', e => {
+              e.stopPropagation();
+              deleteDevice(dev.id);
+            });
+            row.addEventListener('click', () => {
+              selectFloorInScene(dev.floorIndex);
+              pulseDevice(dev.id);
+            });
+            list.appendChild(row);
+          });
+        });
+      }
+
+
+      // ── MOUSE EVENTS ──
+      renderer.domElement.addEventListener('mousemove', (e) => {
+        mouse.x =  (e.clientX / canvasW())  * 2 - 1;
+        mouse.y = -(e.clientY / window.innerHeight) * 2 + 1;
+        raycaster.setFromCamera(mouse, camera);
+        const hits = raycaster.intersectObjects(getSlabMeshes());
+
+        if (hoveredSlab) {
+          const fi = hoveredSlab.userData.floorIndex;
+          if (fi !== selectedFloor)
+            hoveredSlab.material.color.setHex(SLAB_COLOR_DEFAULT[fi % 2]);
+          hoveredSlab = null;
+        }
+        if (hits.length > 0) {
+          const mesh = hits[0].object;
+          if (mesh.userData.floorIndex !== selectedFloor)
+            mesh.material.color.setHex(SLAB_COLOR_HOVER);
+          hoveredSlab = mesh;
+        }
+      });
+
+      renderer.domElement.addEventListener('click', (e) => {
+        if (e.shiftKey) return;
+        mouse.x =  (e.clientX / canvasW())  * 2 - 1;
+        mouse.y = -(e.clientY / window.innerHeight) * 2 + 1;
+        raycaster.setFromCamera(mouse, camera);
+        const hits = raycaster.intersectObjects(getSlabMeshes());
+
+        if (selectedFloor !== null)
+          window.floors[selectedFloor].slab.material.color
+            .setHex(SLAB_COLOR_DEFAULT[selectedFloor % 2]);
+
+        if (hits.length > 0) {
+          const fi = hits[0].object.userData.floorIndex;
+          selectedFloor = fi;
+          hits[0].object.material.color.setHex(SLAB_COLOR_SELECTED);
+        } else {
+          selectedFloor = null;
+        }
+        hoveredSlab = null;
+        updateHUD();
+      });
+
+      renderer.domElement.addEventListener('click', (e) => {
+        if (!e.shiftKey) return;
+        mouse.x =  (e.clientX / canvasW())  * 2 - 1;
+        mouse.y = -(e.clientY / window.innerHeight) * 2 + 1;
+        raycaster.setFromCamera(mouse, camera);
+        const hits = raycaster.intersectObjects(getSlabMeshes());
+        if (!hits.length) return;
+
+        const hit = hits[0];
+        const floorIndex = hit.object.userData.floorIndex;
+        const type = DEVICE_TYPES.find(t => t.id === activeTypeId);
+
+        const geo = type.geo === 'sphere'
+          ? new THREE.SphereGeometry(0.28, 14, 14)
+          : new THREE.BoxGeometry(0.45, 0.45, 0.45);
+        const mat = new THREE.MeshLambertMaterial({ color: type.color });
+        const mesh = new THREE.Mesh(geo, mat);
+        mesh.position.set(hit.point.x, hit.point.y + 0.35, hit.point.z);
+        mesh.userData = { type: 'device', deviceId: deviceIdCounter };
+        scene.add(mesh);
+
+        const labelDiv = document.createElement('div');
+        labelDiv.textContent = type.label;
+        Object.assign(labelDiv.style, {
+          background: 'rgba(0,0,0,0.7)', color: '#fff', fontSize: '10px',
+          padding: '2px 6px', borderRadius: '10px',
+          borderLeft: `2.5px solid ${type.color}`,
+        });
+        const labelObj = new CSS2DObject(labelDiv);
+        labelObj.position.set(0, 0.65, 0);
+        mesh.add(labelObj);
+
+        const device = {
+          id: deviceIdCounter++, typeId: activeTypeId, floorIndex,
+          position: mesh.position.clone(), mesh, labelObj, status: 'online',
+        };
+        window.devices.push(device);
+        window.floors[floorIndex].devices.push(device.id);
+
+        updateHUD();
+        updateSidebar();
+      });
+
+      window.addEventListener('keydown', (e) => {
+        if (e.key === 'Escape' && selectedFloor !== null) {
+          window.floors[selectedFloor].slab.material.color
+            .setHex(SLAB_COLOR_DEFAULT[selectedFloor % 2]);
+          selectedFloor = null;
+          updateHUD();
+        }
+      });
+
+
+      // ── RENDER LOOP ──
+      function animate() {
+        requestAnimationFrame(animate);
+        controls.update();
+        renderer.render(scene, camera);
+        css2dRenderer.render(scene, camera);
+      }
+      animate();
+
+    });
+  </script>
+</head>
+<body></body>
 </html>
