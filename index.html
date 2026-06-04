@@ -13,11 +13,6 @@
       background: rgba(10,10,30,0.88); padding: 8px 14px;
       border-radius: 0 0 10px 10px; z-index: 20; pointer-events: auto;
     }
-    .type-btn {
-      display: flex; align-items: center; gap: 6px;
-      padding: 5px 10px; border-radius: 6px; border: 1.5px solid transparent;
-      cursor: pointer; color: #fff; font-size: 12px; background: transparent;
-    }
     #sidebar {
       position: fixed; right: 0; top: 0;
       width: 268px; height: 100vh; overflow-y: auto;
@@ -28,6 +23,35 @@
     }
     .device-row:hover { background: rgba(255,255,255,0.05); }
     .del-btn:hover { opacity: 0.9 !important; }
+    .ctx-item { padding: 6px 14px; cursor: pointer; }
+    .ctx-item:hover { background: rgba(255,255,255,0.08); }
+
+    .catalog-card {
+      display: flex; align-items: center; gap: 6px;
+      padding: 8px 10px; border-radius: 8px;
+      cursor: grab; color: #fff; font-size: 12px;
+      border: 1.5px solid rgba(255,255,255,0.08);
+      background: rgba(255,255,255,0.04);
+      user-select: none;
+      transition: border-color 0.15s, background 0.15s;
+    }
+    .catalog-card:hover { background: rgba(255,255,255,0.09); border-color: rgba(255,255,255,0.2); }
+    .catalog-card:active { cursor: grabbing; }
+    .catalog-card.dragging { opacity: 0.45; cursor: grabbing; }
+
+    #drag-cursor {
+      position: fixed; pointer-events: none; z-index: 9999;
+      display: none; font-size: 26px;
+      transform: translate(-50%, -50%);
+      filter: drop-shadow(0 2px 8px rgba(0,0,0,0.8));
+    }
+    #drop-hint {
+      position: fixed; pointer-events: none; z-index: 5;
+      display: none; left: 0; top: 0;
+      width: calc(100% - 268px); height: 100%;
+      border: 2px solid rgba(55,138,221,0.35);
+    }
+    #drop-hint.active { display: block; }
   </style>
 
   <script type="importmap">
@@ -70,18 +94,13 @@
         css2dRenderer.setSize(canvasW(), window.innerHeight);
       });
 
-
       // ── SCENE ──
       const scene = new THREE.Scene();
       scene.background = new THREE.Color(0x1a1a2e);
-
-      const ambientLight = new THREE.AmbientLight(0xffffff, 0.55);
-      scene.add(ambientLight);
-
+      scene.add(new THREE.AmbientLight(0xffffff, 0.55));
       const dirLight = new THREE.DirectionalLight(0xffffff, 0.9);
       dirLight.position.set(12, 20, 10);
       scene.add(dirLight);
-
 
       // ── CAMERA ──
       const camera = new THREE.PerspectiveCamera(50, canvasW() / window.innerHeight, 0.1, 1000);
@@ -92,63 +111,55 @@
       controls.enableDamping = true;
       controls.dampingFactor = 0.08;
 
-
       // ── BUILDING ──
       const FLOORS = 10;
       const FLOOR_HEIGHT = 3.2;
       const SLAB_H = 0.28;
       const wallH = FLOOR_HEIGHT - SLAB_H;
-
       window.floors = [];
 
       // ── DEVICE TYPES ──
       const DEVICE_TYPES = [
-        { id:'camera', label:'Camera',     color:'#378ADD', geo:'box',    icon:'📷' },
-        { id:'sensor', label:'Sensor',     color:'#1D9E75', geo:'sphere', icon:'🌡' },
-        { id:'ac',     label:'AC Unit',    color:'#888780', geo:'box',    icon:'❄'  },
-        { id:'alarm',  label:'Fire Alarm', color:'#E24B4A', geo:'sphere', icon:'🔔' },
+        { id: 'camera', label: 'Camera',     color: '#378ADD', icon: '📷' },
+        { id: 'sensor', label: 'Sensor',     color: '#1D9E75', icon: '🌡' },
+        { id: 'ac',     label: 'AC Unit',    color: '#888780', icon: '❄'  },
+        { id: 'alarm',  label: 'Fire Alarm', color: '#E24B4A', icon: '🔔' },
       ];
       let activeTypeId = 'camera';
       let deviceIdCounter = 1;
       window.devices = [];
 
       for (let i = 0; i < FLOORS; i++) {
-        const slabGeo = new THREE.BoxGeometry(12, SLAB_H, 9);
-        const slabMat = new THREE.MeshLambertMaterial({
-          color: i % 2 === 0 ? 0x2a2a3e : 0x252535,
-        });
-        const slab = new THREE.Mesh(slabGeo, slabMat);
+        const slab = new THREE.Mesh(
+          new THREE.BoxGeometry(12, SLAB_H, 9),
+          new THREE.MeshLambertMaterial({ color: i % 2 === 0 ? 0x2a2a3e : 0x252535 })
+        );
         slab.position.y = i * FLOOR_HEIGHT + SLAB_H / 2;
         slab.userData = { type: 'slab', floorIndex: i };
         scene.add(slab);
 
-        const wallMat = new THREE.MeshLambertMaterial({
-          color: 0x1e1e30,
-          transparent: true,
-          opacity: 0.82,
-        });
+        const wallMat = new THREE.MeshLambertMaterial({ color: 0x1e1e30, transparent: true, opacity: 0.82 });
         const wallY = i * FLOOR_HEIGHT + SLAB_H + wallH / 2;
         const wallDefs = [
-          { geo: new THREE.BoxGeometry(12,   wallH, 0.18), x:  0,  z: +4.5 },
-          { geo: new THREE.BoxGeometry(12,   wallH, 0.18), x:  0,  z: -4.5 },
-          { geo: new THREE.BoxGeometry(0.18, wallH, 9),    x: -6,  z:  0   },
-          { geo: new THREE.BoxGeometry(0.18, wallH, 9),    x: +6,  z:  0   },
+          { geo: new THREE.BoxGeometry(12,   wallH, 0.18), x:  0, z: +4.5 },
+          { geo: new THREE.BoxGeometry(12,   wallH, 0.18), x:  0, z: -4.5 },
+          { geo: new THREE.BoxGeometry(0.18, wallH, 9),    x: -6, z:  0   },
+          { geo: new THREE.BoxGeometry(0.18, wallH, 9),    x: +6, z:  0   },
         ];
-        const walls = wallDefs.map(({ geo, x, z }) => {
+        const walls = wallDefs.map(({ geo, x, z }, wi) => {
           const wall = new THREE.Mesh(geo, wallMat);
           wall.position.set(x, wallY, z);
+          wall.userData = { type: 'wall', floorIndex: i, wallIndex: wi };
           scene.add(wall);
           return wall;
         });
-
         window.floors[i] = { index: i, slab, walls, devices: [] };
       }
-
 
       // ── SELECTION STATE ──
       let selectedFloor = null;
       let hoveredSlab = null;
-
+      let xray = false;
       const SLAB_COLOR_DEFAULT  = [0x2a2a3e, 0x252535];
       const SLAB_COLOR_SELECTED = 0x1a3a5c;
       const SLAB_COLOR_HOVER    = 0x222244;
@@ -156,8 +167,529 @@
       const raycaster = new THREE.Raycaster();
       const mouse     = new THREE.Vector2();
 
-      function getSlabMeshes() {
-        return window.floors.map(f => f.slab);
+      function getSlabMeshes()  { return window.floors.map(f => f.slab); }
+      function getWallMeshes()  { return window.floors.flatMap(f => f.walls); }
+      function getAllSurfaces() { return [...getSlabMeshes(), ...getWallMeshes()]; }
+      function getDeviceHitboxes() { return window.devices.map(d => d.hitbox); }
+
+
+      // ── INTERIOR / EXTERIOR DETECTION ──
+      function detectMountSide(hitPoint, worldNormal) {
+        const toPoint = new THREE.Vector3(hitPoint.x, 0, hitPoint.z);
+        return worldNormal.dot(toPoint) > 0 ? 'exterior' : 'interior';
+      }
+
+      function computeWallRotation(worldNormal) {
+        const q = new THREE.Quaternion();
+        q.setFromUnitVectors(new THREE.Vector3(0, 0, 1), worldNormal);
+        return q;
+      }
+
+
+      // ── GROUP HELPERS ──
+      function getAllMeshes(group) {
+        return group.children.filter(c => c.isMesh && c.name !== 'hitbox');
+      }
+
+      function setGroupEmissive(group, colorHex, intensity = 1) {
+        getAllMeshes(group).forEach(m => {
+          m.material.emissive.set(colorHex);
+          m.material.emissiveIntensity = intensity;
+          m.material.needsUpdate = true;
+        });
+      }
+
+      function setGroupOpacity(group, opacity, transparent) {
+        getAllMeshes(group).forEach(m => {
+          m.material.opacity = opacity;
+          m.material.transparent = transparent;
+          m.material.needsUpdate = true;
+        });
+      }
+
+      function disposeGroup(group) {
+        group.traverse(obj => {
+          if (!obj.isMesh) return;
+          obj.geometry.dispose();
+          if (Array.isArray(obj.material)) obj.material.forEach(m => m.dispose());
+          else obj.material.dispose();
+        });
+      }
+
+
+      // ── BUILD DEVICE MESH ──
+      function buildDeviceMesh(typeId, transparent = false, opacity = 1) {
+        const type  = DEVICE_TYPES.find(t => t.id === typeId);
+        const col   = parseInt(type.color.replace('#', ''), 16);
+        const group = new THREE.Group();
+
+        function mat(hex) {
+          return new THREE.MeshLambertMaterial({
+            color: typeof hex === 'string' ? parseInt(hex.replace('#',''), 16) : hex,
+            transparent: transparent || opacity < 1,
+            opacity,
+            depthWrite: !transparent,
+          });
+        }
+
+        if (typeId === 'camera') {
+          // Dome camera: flat base + hemisphere dome + lens cylinder
+          const base = new THREE.Mesh(new THREE.CylinderGeometry(0.20, 0.20, 0.09, 14), mat(col));
+          const dome = new THREE.Mesh(new THREE.SphereGeometry(0.16, 12, 8, 0, Math.PI * 2, 0, Math.PI / 2), mat(col));
+          dome.position.y = 0.045;
+          dome.rotation.x = Math.PI; // hemisphere pointing down (for ceiling/floor)
+          const lens = new THREE.Mesh(new THREE.CylinderGeometry(0.045, 0.06, 0.09, 10), mat(0x1a2a44));
+          lens.rotation.x = Math.PI / 2;
+          lens.position.z = 0.13;
+          group.add(base, dome, lens);
+
+        } else if (typeId === 'sensor') {
+          // Round sensor disc + central bump
+          const disc = new THREE.Mesh(new THREE.CylinderGeometry(0.20, 0.20, 0.07, 16), mat(col));
+          const bump = new THREE.Mesh(new THREE.CylinderGeometry(0.04, 0.09, 0.09, 12), mat(col));
+          bump.position.y = 0.08;
+          group.add(disc, bump);
+
+        } else if (typeId === 'ac') {
+          // Wide flat AC unit: body + front panel + vent slits
+          const body  = new THREE.Mesh(new THREE.BoxGeometry(0.70, 0.28, 0.16), mat(col));
+          const panel = new THREE.Mesh(new THREE.BoxGeometry(0.64, 0.22, 0.02), mat(0xaaaaaa));
+          panel.position.z = 0.09;
+          group.add(body, panel);
+          for (let v = -1; v <= 1; v++) {
+            const vent = new THREE.Mesh(new THREE.BoxGeometry(0.50, 0.025, 0.04), mat(0x555555));
+            vent.position.set(0, v * 0.07, 0.10);
+            group.add(vent);
+          }
+
+        } else if (typeId === 'alarm') {
+          // Fire alarm: disc + strobe half-dome + outer ring
+          const disc = new THREE.Mesh(new THREE.CylinderGeometry(0.22, 0.22, 0.07, 16), mat(col));
+          const dome = new THREE.Mesh(
+            new THREE.SphereGeometry(0.10, 10, 7, 0, Math.PI * 2, 0, Math.PI / 2),
+            mat(0xff6666)
+          );
+          dome.position.y = 0.035;
+          const ring = new THREE.Mesh(new THREE.TorusGeometry(0.22, 0.022, 7, 24), mat(0xcc2222));
+          ring.rotation.x = Math.PI / 2;
+          group.add(disc, dome, ring);
+        }
+
+        // Invisible hitbox for raycasting
+        const hitbox = new THREE.Mesh(
+          new THREE.SphereGeometry(0.30, 6, 6),
+          new THREE.MeshBasicMaterial({ visible: false })
+        );
+        hitbox.name = 'hitbox';
+        group.add(hitbox);
+
+        return { group, hitbox };
+      }
+
+
+      // ── PLACE DEVICE ──
+      function placeDevice(typeId, hitPoint, hitObject, faceNormal) {
+        const isSlab = hitObject.userData.type === 'slab';
+        const isWall = hitObject.userData.type === 'wall';
+        if (!isSlab && !isWall) return null;
+
+        const floorIndex = hitObject.userData.floorIndex;
+        const type = DEVICE_TYPES.find(t => t.id === typeId);
+
+        let worldNormal = null;
+        let mountType = 'floor';
+        let wallQuat = null;
+
+        if (isWall && faceNormal) {
+          worldNormal = faceNormal.clone().transformDirection(hitObject.matrixWorld).normalize();
+          mountType = detectMountSide(hitPoint, worldNormal);
+          wallQuat = computeWallRotation(worldNormal);
+        }
+
+        const pos = hitPoint.clone();
+        if (isWall && worldNormal) pos.addScaledVector(worldNormal, 0.25);
+        else pos.y += 0.35;
+
+        const heightM = +(pos.y.toFixed(2));
+        const surfaceNormal = worldNormal
+          ? { x: +worldNormal.x.toFixed(4), y: +worldNormal.y.toFixed(4), z: +worldNormal.z.toFixed(4) }
+          : null;
+
+        const { group, hitbox } = buildDeviceMesh(typeId);
+        group.position.copy(pos);
+        if (wallQuat) group.setRotationFromQuaternion(wallQuat);
+        group.userData = { type: 'device', deviceId: deviceIdCounter };
+        hitbox.userData = { type: 'device', deviceId: deviceIdCounter };
+        scene.add(group);
+
+        const labelDiv = document.createElement('div');
+        labelDiv.textContent = type.label;
+        Object.assign(labelDiv.style, {
+          background: 'rgba(0,0,0,0.7)', color: '#fff', fontSize: '10px',
+          padding: '2px 6px', borderRadius: '10px',
+          borderLeft: `2.5px solid ${type.color}`,
+        });
+        const labelObj = new CSS2DObject(labelDiv);
+        labelObj.position.set(0, 0.55, 0);
+        group.add(labelObj);
+
+        const euler = group.rotation;
+        const device = {
+          id: deviceIdCounter++, typeId, floorIndex,
+          group, hitbox, labelObj, status: 'online',
+          heightM, mountType, surfaceNormal,
+          rotation: { x: +euler.x.toFixed(4), y: +euler.y.toFixed(4), z: +euler.z.toFixed(4) },
+        };
+        window.devices.push(device);
+        window.floors[floorIndex].devices.push(device.id);
+
+        updateHUD(); updateSidebar(); autoSave();
+        return device;
+      }
+
+
+      // ── PREVIEW GHOST ──
+      let previewMesh = null;
+
+      function showPreview(typeId) {
+        hidePreview();
+        const { group } = buildDeviceMesh(typeId, true, 0.45);
+        group.traverse(obj => {
+          if (obj.isMesh && obj.name !== 'hitbox') {
+            obj.material.depthWrite = false;
+          }
+        });
+        group.userData = { type: 'preview' };
+
+        const ringGeo = new THREE.RingGeometry(0.38, 0.55, 24);
+        const ringMat = new THREE.MeshBasicMaterial({
+          color: parseInt(DEVICE_TYPES.find(t => t.id === typeId).color.replace('#',''), 16),
+          side: THREE.DoubleSide, transparent: true, opacity: 0.55,
+        });
+        const ring = new THREE.Mesh(ringGeo, ringMat);
+        ring.rotation.x = -Math.PI / 2;
+        ring.position.y = -0.30;
+        ring.name = 'ring';
+        group.add(ring);
+
+        group.visible = false;
+        scene.add(group);
+        previewMesh = group;
+      }
+
+      function hidePreview() {
+        if (previewMesh) {
+          scene.remove(previewMesh);
+          disposeGroup(previewMesh);
+          previewMesh = null;
+        }
+      }
+
+      function movePreview(hitPoint, hitObject, faceNormal) {
+        if (!previewMesh) return;
+        const isSlab = hitObject.userData.type === 'slab';
+        const isWall = hitObject.userData.type === 'wall';
+        const ring = previewMesh.getObjectByName('ring');
+
+        if (isWall && faceNormal) {
+          const worldNormal = faceNormal.clone().transformDirection(hitObject.matrixWorld).normalize();
+          previewMesh.position.copy(hitPoint).addScaledVector(worldNormal, 0.25);
+          previewMesh.setRotationFromQuaternion(computeWallRotation(worldNormal));
+          if (ring) ring.visible = false;
+        } else if (isSlab) {
+          previewMesh.position.copy(hitPoint);
+          previewMesh.position.y += 0.35;
+          previewMesh.rotation.set(0, 0, 0);
+          if (ring) ring.visible = true;
+        }
+        previewMesh.visible = true;
+      }
+
+
+      // ── WALL HIGHLIGHT ──
+      let wallHighlight = null;
+
+      function updateWallHighlight(hitPoint, worldNormal, mountType) {
+        clearWallHighlight();
+        const color = mountType === 'exterior' ? 0x378ADD : 0x7B5EA7;
+        const geo = new THREE.PlaneGeometry(0.9, 0.9);
+        const mat = new THREE.MeshBasicMaterial({
+          color, transparent: true, opacity: 0.28, side: THREE.DoubleSide, depthWrite: false,
+        });
+        wallHighlight = new THREE.Mesh(geo, mat);
+        wallHighlight.position.copy(hitPoint).addScaledVector(worldNormal, 0.02);
+        wallHighlight.lookAt(wallHighlight.position.clone().add(worldNormal));
+        scene.add(wallHighlight);
+      }
+
+      function clearWallHighlight() {
+        if (wallHighlight) {
+          scene.remove(wallHighlight);
+          wallHighlight.geometry.dispose();
+          wallHighlight.material.dispose();
+          wallHighlight = null;
+        }
+      }
+
+
+      // ── DRAG STATE ──
+      let dragState = null;
+      const DRAG_THRESHOLD = 6;
+      let suppressNextClick = false;
+
+      const dragCursor = document.getElementById('drag-cursor');
+      const dropHint   = document.getElementById('drop-hint');
+
+      function cancelDrag() {
+        if (!dragState) return;
+        // Restore device visibility if move drag
+        if (dragState.mode === 'move' && dragState.device) {
+          dragState.device.group.visible = true;
+        }
+        dragState = null;
+        controls.enabled = true;
+        hidePreview();
+        clearWallHighlight();
+        if (dragCursor) dragCursor.style.display = 'none';
+        if (dropHint) dropHint.classList.remove('active');
+        document.querySelectorAll('.catalog-card.dragging').forEach(c => c.classList.remove('dragging'));
+        document.removeEventListener('mousemove', onDragMouseMove);
+        document.removeEventListener('mouseup',   onDragMouseUp);
+        renderer.domElement.style.cursor = 'default';
+        tooltip.style.display = 'none';
+      }
+
+      // Start drag from catalog card
+      function onCatalogMouseDown(e) {
+        if (e.button !== 0) return;
+        e.preventDefault();
+        const typeId = e.currentTarget.dataset.typeId;
+        dragState = { mode: 'new', typeId, startX: e.clientX, startY: e.clientY, active: false };
+        document.addEventListener('mousemove', onDragMouseMove);
+        document.addEventListener('mouseup',   onDragMouseUp);
+      }
+
+      // Start drag to reposition an existing device
+      renderer.domElement.addEventListener('mousedown', (e) => {
+        if (e.button !== 0 || dragState) return;
+        mouse.x =  (e.clientX / canvasW()) * 2 - 1;
+        mouse.y = -(e.clientY / window.innerHeight) * 2 + 1;
+        raycaster.setFromCamera(mouse, camera);
+
+        const hitboxes = getDeviceHitboxes();
+        const hits = hitboxes.length ? raycaster.intersectObjects(hitboxes, false) : [];
+        if (!hits.length) return;
+
+        const devId = hits[0].object.userData.deviceId;
+        const device = window.devices.find(d => d.id === devId);
+        if (!device) return;
+
+        controls.enabled = false;
+        suppressNextClick = true;
+        dragState = {
+          mode: 'move', deviceId: devId, device,
+          typeId: device.typeId,
+          startX: e.clientX, startY: e.clientY, active: false,
+        };
+        document.addEventListener('mousemove', onDragMouseMove);
+        document.addEventListener('mouseup',   onDragMouseUp);
+      });
+
+      function onDragMouseMove(e) {
+        if (!dragState) return;
+        const dx = e.clientX - dragState.startX;
+        const dy = e.clientY - dragState.startY;
+
+        if (!dragState.active) {
+          if (Math.sqrt(dx * dx + dy * dy) < DRAG_THRESHOLD) return;
+          dragState.active = true;
+          controls.enabled = false;
+
+          // Hide original device when moving
+          if (dragState.mode === 'move' && dragState.device) {
+            dragState.device.group.visible = false;
+          }
+
+          showPreview(dragState.typeId);
+          if (dropHint) dropHint.classList.add('active');
+
+          const type = DEVICE_TYPES.find(t => t.id === dragState.typeId);
+          if (dragCursor) {
+            dragCursor.textContent = type.icon;
+            dragCursor.style.display = 'block';
+          }
+          if (dragState.mode === 'new') {
+            document.querySelectorAll('.catalog-card').forEach(c => {
+              if (c.dataset.typeId === dragState.typeId) c.classList.add('dragging');
+            });
+          }
+        }
+
+        if (dragCursor) {
+          dragCursor.style.left = e.clientX + 'px';
+          dragCursor.style.top  = e.clientY + 'px';
+        }
+
+        if (e.clientX >= canvasW()) {
+          if (previewMesh) previewMesh.visible = false;
+          clearWallHighlight();
+          tooltip.style.display = 'none';
+          renderer.domElement.style.cursor = 'no-drop';
+          return;
+        }
+
+        if (!previewMesh) showPreview(dragState.typeId);
+
+        mouse.x =  (e.clientX / canvasW()) * 2 - 1;
+        mouse.y = -(e.clientY / window.innerHeight) * 2 + 1;
+        raycaster.setFromCamera(mouse, camera);
+
+        const hits = raycaster.intersectObjects(getAllSurfaces(), false);
+
+        if (hits.length > 0) {
+          const hit    = hits[0];
+          const hitObj = hit.object;
+          const isSlab = hitObj.userData.type === 'slab';
+          const isWall = hitObj.userData.type === 'wall';
+
+          movePreview(hit.point, hitObj, hit.face.normal);
+          renderer.domElement.style.cursor = 'copy';
+
+          // Wall highlight + tooltip
+          if (isWall) {
+            const wn = hit.face.normal.clone().transformDirection(hitObj.matrixWorld).normalize();
+            const mountType = detectMountSide(hit.point, wn);
+            updateWallHighlight(hit.point, wn, mountType);
+
+            const previewY  = (hit.point.y + 0.25).toFixed(1);
+            const floorLabel = 'Tầng ' + (hitObj.userData.floorIndex + 1);
+            if (mountType === 'exterior') {
+              tooltip.innerHTML = `
+                <div style="background:#1a3a5c;border-left:3px solid #378ADD;padding:6px 10px;border-radius:6px;min-width:140px">
+                  <div style="color:#378ADD;font-weight:600;font-size:12px">↗ Gắn NGOÀI tường</div>
+                  <div style="color:#94a3b8;font-size:11px;margin-top:2px">${floorLabel} · ${previewY}m</div>
+                </div>`;
+            } else {
+              tooltip.innerHTML = `
+                <div style="background:#2a1a4e;border-left:3px solid #7B5EA7;padding:6px 10px;border-radius:6px;min-width:140px">
+                  <div style="color:#9B7FD4;font-weight:600;font-size:12px">↙ Gắn TRONG tường</div>
+                  <div style="color:#94a3b8;font-size:11px;margin-top:2px">${floorLabel} · ${previewY}m</div>
+                </div>`;
+            }
+          } else {
+            clearWallHighlight();
+            const previewY  = (hit.point.y + 0.35).toFixed(1);
+            const floorLabel = 'Tầng ' + (hitObj.userData.floorIndex + 1);
+            tooltip.innerHTML = `
+              <div style="background:#1a2a1a;border-left:3px solid #1D9E75;padding:6px 10px;border-radius:6px;min-width:120px">
+                <div style="color:#1D9E75;font-weight:600;font-size:12px">▥ Đặt lên sàn</div>
+                <div style="color:#94a3b8;font-size:11px;margin-top:2px">${floorLabel} · ${previewY}m</div>
+              </div>`;
+          }
+          tooltip.style.left    = (e.clientX + 16) + 'px';
+          tooltip.style.top     = (e.clientY + 10) + 'px';
+          tooltip.style.display = 'block';
+        } else {
+          if (previewMesh) previewMesh.visible = false;
+          clearWallHighlight();
+          tooltip.style.display = 'none';
+          renderer.domElement.style.cursor = 'no-drop';
+        }
+      }
+
+      function onDragMouseUp(e) {
+        document.removeEventListener('mousemove', onDragMouseMove);
+        document.removeEventListener('mouseup',   onDragMouseUp);
+
+        if (!dragState) return;
+        const { mode, active, typeId, device: movingDevice } = dragState;
+        dragState = null;
+
+        controls.enabled = true;
+        document.querySelectorAll('.catalog-card.dragging').forEach(c => c.classList.remove('dragging'));
+        if (dragCursor) dragCursor.style.display = 'none';
+        if (dropHint) dropHint.classList.remove('active');
+        tooltip.style.display = 'none';
+        clearWallHighlight();
+        renderer.domElement.style.cursor = 'default';
+
+        // Restore visibility if move drag (even on cancel)
+        if (mode === 'move' && movingDevice) {
+          movingDevice.group.visible = true;
+        }
+
+        if (!active) return;
+
+        if (e.clientX >= canvasW()) {
+          hidePreview();
+          return;
+        }
+
+        mouse.x =  (e.clientX / canvasW()) * 2 - 1;
+        mouse.y = -(e.clientY / window.innerHeight) * 2 + 1;
+        raycaster.setFromCamera(mouse, camera);
+
+        const hits = raycaster.intersectObjects(getAllSurfaces(), false);
+        hidePreview();
+
+        if (!hits.length) return;
+
+        const hit = hits[0];
+
+        if (mode === 'new') {
+          const newDevice = placeDevice(typeId, hit.point, hit.object, hit.face.normal);
+          if (newDevice) {
+            const type = DEVICE_TYPES.find(t => t.id === typeId);
+            const mountLabel = newDevice.mountType === 'exterior' ? 'ngoài' : newDevice.mountType === 'interior' ? 'trong' : 'sàn';
+            showToast(`${type.icon} ${type.label} đặt tại ${newDevice.heightM}m (${mountLabel})`, 'success');
+          }
+
+        } else if (mode === 'move' && movingDevice) {
+          // Compute new position + orientation
+          const isWall = hit.object.userData.type === 'wall';
+          const isSlab = hit.object.userData.type === 'slab';
+          const newFloorIndex = hit.object.userData.floorIndex;
+
+          let worldNormal = null;
+          let mountType = 'floor';
+          let wallQuat = null;
+
+          if (isWall && hit.face.normal) {
+            worldNormal = hit.face.normal.clone().transformDirection(hit.object.matrixWorld).normalize();
+            mountType = detectMountSide(hit.point, worldNormal);
+            wallQuat = computeWallRotation(worldNormal);
+          }
+
+          const newPos = hit.point.clone();
+          if (isWall && worldNormal) newPos.addScaledVector(worldNormal, 0.25);
+          else newPos.y += 0.35;
+
+          const newHeightM = +(newPos.y.toFixed(2));
+          const newSurfaceNormal = worldNormal
+            ? { x: +worldNormal.x.toFixed(4), y: +worldNormal.y.toFixed(4), z: +worldNormal.z.toFixed(4) }
+            : null;
+
+          // Update group position/rotation
+          movingDevice.group.position.copy(newPos);
+          if (wallQuat) movingDevice.group.setRotationFromQuaternion(wallQuat);
+          else movingDevice.group.rotation.set(0, 0, 0);
+
+          // Update floor arrays
+          const oldFloor = window.floors[movingDevice.floorIndex];
+          oldFloor.devices = oldFloor.devices.filter(id => id !== movingDevice.id);
+          movingDevice.floorIndex = newFloorIndex;
+          movingDevice.heightM = newHeightM;
+          movingDevice.mountType = mountType;
+          movingDevice.surfaceNormal = newSurfaceNormal;
+          const euler = movingDevice.group.rotation;
+          movingDevice.rotation = { x: +euler.x.toFixed(4), y: +euler.y.toFixed(4), z: +euler.z.toFixed(4) };
+          window.floors[newFloorIndex].devices.push(movingDevice.id);
+
+          const type = DEVICE_TYPES.find(t => t.id === movingDevice.typeId);
+          const mountLabel = mountType === 'exterior' ? 'ngoài' : mountType === 'interior' ? 'trong' : 'sàn';
+          showToast(`${type.icon} đã di chuyển → ${newHeightM}m (${mountLabel})`, 'success');
+          updateSidebar(); updateHUD(); autoSave();
+        }
       }
 
 
@@ -174,13 +706,17 @@
       document.body.appendChild(hud);
 
       function updateHUD() {
-        const f     = selectedFloor;
-        const count = f !== null ? window.floors[f].devices.length : '—';
+        const total = window.devices.length;
+        let maxCount = 0, maxFloor = -1;
+        window.floors.forEach((f, i) => {
+          if (f.devices.length > maxCount) { maxCount = f.devices.length; maxFloor = i; }
+        });
         hud.innerHTML = `
-          <div style="margin-bottom:8px;font-size:14px;font-weight:bold">BUILDING MANAGER</div>
-          <div>Selected: ${f !== null ? 'Floor ' + (f + 1) : '—'}</div>
-          <div>Devices on floor: ${count}</div>
-          <div>Total: ${window.devices?.length ?? 0}</div>
+          <div style="font-weight:700;margin-bottom:8px;letter-spacing:.05em;color:#94a3b8">BUILDING MANAGER</div>
+          <div style="color:#64748b;font-size:11px">Selected: <span style="color:#e2e8f0">${selectedFloor !== null ? 'Floor ' + (selectedFloor + 1) : '—'}</span></div>
+          <hr style="border-color:#2d3748;margin:6px 0">
+          <div style="color:#64748b;font-size:11px">Total: <span style="color:#e2e8f0">${total}</span></div>
+          ${total > 0 && maxFloor >= 0 ? `<div style="color:#64748b;font-size:11px">Busiest: <span style="color:#1D9E75">Floor ${maxFloor + 1} (${maxCount})</span></div>` : ''}
         `;
       }
       updateHUD();
@@ -191,18 +727,128 @@
       toolbar.id = 'toolbar';
       document.body.appendChild(toolbar);
 
-      function refreshToolbar() {
-        toolbar.querySelectorAll('.type-btn').forEach(btn => {
-          const type = DEVICE_TYPES.find(t => t.id === btn.dataset.typeId);
-          if (btn.dataset.typeId === activeTypeId) {
-            btn.style.border = `1.5px solid ${type.color}`;
-            btn.style.background = hexToRgba(type.color, 0.15);
-          } else {
-            btn.style.border = '1.5px solid transparent';
-            btn.style.background = 'transparent';
-          }
+      const xrayBtn = document.createElement('button');
+      xrayBtn.id = 'xray-btn';
+      xrayBtn.textContent = '👁 X-Ray';
+      xrayBtn.style.cssText = 'padding:6px 12px;background:#111827;color:#e2e8f0;border:1px solid #4a5568;border-radius:6px;cursor:pointer;font-size:13px;';
+      toolbar.appendChild(xrayBtn);
+
+      xrayBtn.addEventListener('click', () => {
+        xray = !xray;
+        xrayBtn.textContent = xray ? '👁 X-Ray ON' : '👁 X-Ray';
+        xrayBtn.style.borderColor = xray ? '#1D9E75' : '#4a5568';
+        const target = xray ? 0.07 : 0.82;
+        function tickXray() {
+          let allDone = true;
+          window.floors.forEach(f => {
+            f.walls.forEach(w => {
+              const delta = target - w.material.opacity;
+              if (Math.abs(delta) < 0.005) { w.material.opacity = target; }
+              else { w.material.opacity += delta * 0.08; allDone = false; }
+              w.material.needsUpdate = true;
+            });
+          });
+          if (!allDone) requestAnimationFrame(tickXray);
+        }
+        tickXray();
+      });
+
+      const exportBtn = document.createElement('button');
+      exportBtn.textContent = '⬇ Export';
+      exportBtn.style.cssText = 'margin-left:4px;padding:6px 12px;background:#111827;color:#e2e8f0;border:1px solid #4a5568;border-radius:6px;cursor:pointer;font-size:13px;';
+      exportBtn.addEventListener('click', () => {
+        const blob = new Blob([serializeLayout()], { type: 'application/json' });
+        const a = document.createElement('a'); a.href = URL.createObjectURL(blob);
+        a.download = 'building-layout.json'; a.click();
+        showToast('Layout exported', 'success');
+      });
+      toolbar.appendChild(exportBtn);
+
+      const importInput = document.createElement('input');
+      importInput.type = 'file'; importInput.accept = '.json,application/json';
+      importInput.style.display = 'none';
+      document.body.appendChild(importInput);
+
+      const importBtn = document.createElement('button');
+      importBtn.textContent = '⬆ Import';
+      importBtn.style.cssText = 'padding:6px 12px;background:#111827;color:#e2e8f0;border:1px solid #4a5568;border-radius:6px;cursor:pointer;font-size:13px;';
+      importBtn.addEventListener('click', () => importInput.click());
+      toolbar.appendChild(importBtn);
+
+      importInput.addEventListener('change', () => {
+        const file = importInput.files[0]; if (!file) return;
+        const reader = new FileReader(); reader.readAsText(file);
+        reader.onload = () => {
+          try {
+            const data = JSON.parse(reader.result);
+            if (!data.version || !Array.isArray(data.devices)) throw new Error();
+            restoreLayout(data); autoSave();
+            showToast('Imported — ' + data.devices.length + ' devices', 'success');
+          } catch(e) { showToast('Invalid file format', 'error'); }
+          importInput.value = '';
+        };
+      });
+
+
+      // ── SIDEBAR ──
+      const sidebar = document.createElement('div');
+      sidebar.id = 'sidebar';
+      sidebar.innerHTML = `
+        <div style="font-size:11px;font-weight:700;letter-spacing:.08em;color:#64748b;margin-bottom:8px;text-transform:uppercase">Catalog thiết bị</div>
+        <div id="device-catalog" style="display:grid;grid-template-columns:1fr 1fr;gap:6px;margin-bottom:10px"></div>
+        <div style="font-size:10px;color:#3a3a60;line-height:1.55;margin-bottom:12px;padding:8px;background:rgba(55,138,221,0.06);border-radius:6px;border:1px solid rgba(55,138,221,0.12)">
+          <div>📌 Kéo thả vào canvas để đặt</div>
+          <div style="margin-top:4px">🏠 <span style="color:#555f7a">Ngoài tường:</span> kéo trực tiếp</div>
+          <div>👁 <span style="color:#555f7a">Trong tường:</span> bật X-Ray rồi kéo</div>
+          <div style="margin-top:4px">✋ <span style="color:#555f7a">Di chuyển:</span> kéo thiết bị đã đặt</div>
+        </div>
+        <hr style="border:none;border-top:1px solid #2a2a3e;margin:0 0 10px 0">
+        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px">
+          <span style="font-size:14px;font-weight:600">Đã đặt</span>
+          <span id="total-badge" style="background:#2a2a3e;color:#378ADD;font-size:11px;padding:2px 8px;border-radius:10px">0</span>
+        </div>
+        <div style="display:flex;gap:12px;margin:8px 0;font-size:11px;color:#aaa">
+          <span>🟢 <span id="stat-online">0</span></span>
+          <span>🟡 <span id="stat-warning">0</span></span>
+          <span>🔴 <span id="stat-offline">0</span></span>
+        </div>
+        <hr style="border:none;border-top:1px solid #2a2a3e;margin:8px 0">
+        <div id="device-list"></div>
+        <div id="empty-state" style="color:#555;text-align:center;margin-top:40px;line-height:1.8">
+          <div style="font-size:22px;margin-bottom:8px">📦</div>
+          <div>Chưa có thiết bị</div>
+          <div style="font-size:11px;margin-top:4px;color:#3a3a55">Kéo thả từ catalog ở trên</div>
+        </div>
+      `;
+      document.body.appendChild(sidebar);
+
+      // Catalog cards
+      const catalogEl = document.getElementById('device-catalog');
+      function refreshCatalogHighlight() {
+        document.querySelectorAll('.catalog-card').forEach(c => {
+          const t = DEVICE_TYPES.find(tt => tt.id === c.dataset.typeId);
+          const isActive = c.dataset.typeId === activeTypeId;
+          c.style.borderColor = isActive ? t.color : 'rgba(255,255,255,0.08)';
+          c.style.background  = isActive ? hexToRgba(t.color, 0.15) : 'rgba(255,255,255,0.04)';
         });
       }
+
+      DEVICE_TYPES.forEach(type => {
+        const card = document.createElement('div');
+        card.className = 'catalog-card';
+        card.dataset.typeId = type.id;
+        card.innerHTML = `
+          <span style="width:8px;height:8px;border-radius:50%;background:${type.color};flex-shrink:0"></span>
+          <span>${type.icon} ${type.label}</span>
+        `;
+        card.addEventListener('mousedown', onCatalogMouseDown);
+        card.addEventListener('click', () => {
+          activeTypeId = type.id;
+          refreshCatalogHighlight();
+        });
+        catalogEl.appendChild(card);
+      });
+      refreshCatalogHighlight();
 
       function hexToRgba(hex, alpha) {
         const r = parseInt(hex.slice(1,3),16);
@@ -211,47 +857,11 @@
         return `rgba(${r},${g},${b},${alpha})`;
       }
 
-      DEVICE_TYPES.forEach(type => {
-        const btn = document.createElement('button');
-        btn.className = 'type-btn';
-        btn.dataset.typeId = type.id;
-        btn.innerHTML = `<span style="width:9px;height:9px;border-radius:50%;background:${type.color};display:inline-block;flex-shrink:0"></span>${type.icon} ${type.label}`;
-        btn.addEventListener('click', () => {
-          activeTypeId = type.id;
-          refreshToolbar();
-        });
-        toolbar.appendChild(btn);
-      });
-
-      refreshToolbar();
-
-      // ── SIDEBAR DOM ──
-      const sidebar = document.createElement('div');
-      sidebar.id = 'sidebar';
-      sidebar.innerHTML = `
-        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px">
-          <span style="font-size:14px;font-weight:600">Devices</span>
-          <span id="total-badge" style="background:#2a2a3e;color:#378ADD;font-size:11px;padding:2px 8px;border-radius:10px">0</span>
-        </div>
-        <div style="display:flex;gap:12px;margin:10px 0;font-size:11px;color:#aaa">
-          <span>🟢 <span id="stat-online">0</span> online</span>
-          <span>🟡 <span id="stat-warning">0</span> warning</span>
-          <span>🔴 <span id="stat-offline">0</span> offline</span>
-        </div>
-        <hr style="border:none;border-top:1px solid #2a2a3e;margin:10px 0">
-        <div id="device-list"></div>
-        <div id="empty-state" style="color:#555;text-align:center;margin-top:40px;line-height:1.8">
-          <div>No devices yet</div>
-          <div style="font-size:11px">Shift+click a floor to place one</div>
-        </div>
-      `;
-      document.body.appendChild(sidebar);
 
       // ── FLOOR SELECTION FROM SIDEBAR ──
       function selectFloorInScene(i) {
         if (selectedFloor !== null)
-          window.floors[selectedFloor].slab.material.color
-            .setHex(SLAB_COLOR_DEFAULT[selectedFloor % 2]);
+          window.floors[selectedFloor].slab.material.color.setHex(SLAB_COLOR_DEFAULT[selectedFloor % 2]);
         selectedFloor = i;
         window.floors[i].slab.material.color.setHex(SLAB_COLOR_SELECTED);
         hoveredSlab = null;
@@ -263,40 +873,54 @@
         const idx = window.devices.findIndex(d => d.id === id);
         if (idx === -1) return;
         const dev = window.devices[idx];
-        dev.mesh.remove(dev.labelObj);
-        scene.remove(dev.mesh);
-        dev.mesh.geometry.dispose();
-        dev.mesh.material.dispose();
+        dev.group.remove(dev.labelObj);
+        scene.remove(dev.group);
+        disposeGroup(dev.group);
         window.devices.splice(idx, 1);
         const floor = window.floors[dev.floorIndex];
-        const fi = floor.devices.indexOf(id);
-        if (fi !== -1) floor.devices.splice(fi, 1);
-        updateSidebar();
-        updateHUD();
+        floor.devices = floor.devices.filter(fid => fid !== id);
+        updateSidebar(); updateHUD(); autoSave();
+      }
+
+      // ── SET STATUS ──
+      function setStatus(id, status) {
+        const device = window.devices.find(d => d.id === id);
+        if (!device) return;
+        device.status = status;
+        if (status === 'online') {
+          setGroupEmissive(device.group, '#1D9E75', 0.4);
+          setGroupOpacity(device.group, 1.0, false);
+        } else if (status === 'warning') {
+          setGroupEmissive(device.group, '#EF9F27', 0.6);
+          setGroupOpacity(device.group, 1.0, false);
+        } else {
+          setGroupEmissive(device.group, '#000000', 0);
+          setGroupOpacity(device.group, 0.35, true);
+        }
+        updateSidebar(); autoSave();
       }
 
       // ── PULSE DEVICE ──
       function pulseDevice(id) {
         const dev = window.devices.find(d => d.id === id);
         if (!dev) return;
-        const mesh = dev.mesh;
         const duration = 350;
         const start = performance.now();
         function tick(now) {
           const t = Math.min((now - start) / duration, 1);
           const s = t < 0.5 ? 1 + 0.8 * (t * 2) : 1 + 0.8 * (2 - t * 2);
-          mesh.scale.setScalar(s);
+          dev.group.scale.setScalar(s);
           if (t < 1) requestAnimationFrame(tick);
-          else mesh.scale.setScalar(1);
+          else dev.group.scale.setScalar(1);
         }
         requestAnimationFrame(tick);
       }
 
       // ── SIDEBAR UPDATE ──
       function updateSidebar() {
-        const list       = document.getElementById('device-list');
-        const emptyState = document.getElementById('empty-state');
-        const totalBadge = document.getElementById('total-badge');
+        const list        = document.getElementById('device-list');
+        const emptyState  = document.getElementById('empty-state');
+        const totalBadge  = document.getElementById('total-badge');
         const statOnline  = document.getElementById('stat-online');
         const statWarning = document.getElementById('stat-warning');
         const statOffline = document.getElementById('stat-offline');
@@ -308,17 +932,14 @@
           else if (d.status === 'warning') warning++;
           else offline++;
         });
-        totalBadge.textContent  = window.devices.length;
+        totalBadge.textContent = window.devices.length;
         statOnline.textContent  = online;
         statWarning.textContent = warning;
         statOffline.textContent = offline;
 
         list.innerHTML = '';
-        if (window.devices.length === 0) {
-          emptyState.style.display = 'block';
-          return;
-        }
-        emptyState.style.display = 'none';
+        emptyState.style.display = window.devices.length === 0 ? 'block' : 'none';
+        if (!window.devices.length) return;
 
         const byFloor = {};
         window.devices.forEach(d => {
@@ -327,35 +948,33 @@
         });
 
         Object.keys(byFloor).sort((a, b) => a - b).forEach(fi => {
-          const floorDevices = byFloor[fi];
-          const header = document.createElement('div');
-          header.style.cssText = 'font-size:11px;opacity:.5;margin-top:12px;margin-bottom:4px;text-transform:uppercase;letter-spacing:.5px';
-          header.textContent = `Floor ${parseInt(fi) + 1}  (${floorDevices.length})`;
-          list.appendChild(header);
+          const hdr = document.createElement('div');
+          hdr.style.cssText = 'font-size:11px;opacity:.5;margin-top:12px;margin-bottom:4px;text-transform:uppercase;letter-spacing:.5px';
+          hdr.textContent = `Tầng ${parseInt(fi) + 1}  (${byFloor[fi].length})`;
+          list.appendChild(hdr);
 
-          floorDevices.forEach(dev => {
+          byFloor[fi].forEach(dev => {
             const type = DEVICE_TYPES.find(t => t.id === dev.typeId);
-            const statusColor = dev.status === 'online'  ? '#1D9E75'
-                              : dev.status === 'warning' ? '#E2A84B' : '#E24B4A';
+            const statusColor = dev.status === 'online' ? '#1D9E75' : dev.status === 'warning' ? '#E2A84B' : '#E24B4A';
+            const mountIcon  = dev.mountType === 'exterior' ? '↗' : dev.mountType === 'interior' ? '↙' : '▥';
+            const mountTitle = dev.mountType === 'exterior' ? 'Ngoài' : dev.mountType === 'interior' ? 'Trong' : 'Sàn';
+            const heightLabel = dev.heightM != null ? `${dev.heightM}m` : '';
+
             const row = document.createElement('div');
             row.className = 'device-row';
-            row.style.cssText = 'display:flex;align-items:center;gap:8px;padding:6px 8px;border-radius:6px;cursor:pointer;transition:background 0.15s';
+            row.style.cssText = 'display:flex;align-items:center;gap:6px;padding:6px 8px;border-radius:6px;cursor:pointer;transition:background 0.15s';
             row.innerHTML = `
               <span style="width:8px;height:8px;border-radius:50%;background:${type.color};flex-shrink:0"></span>
               <span style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">
                 ${type.icon} ${type.label} <span style="color:#555;font-size:11px">#${dev.id}</span>
               </span>
-              <span style="width:10px;height:10px;border-radius:50%;background:${statusColor};flex-shrink:0"></span>
-              <button class="del-btn" style="background:none;border:none;color:#fff;font-size:14px;cursor:pointer;opacity:.4;padding:0 2px;line-height:1" title="Delete">🗑</button>
+              ${heightLabel ? `<span style="font-size:10px;color:#64748b;flex-shrink:0">${heightLabel}</span>` : ''}
+              <span style="font-size:10px;color:#4a5568;flex-shrink:0" title="${mountTitle}">${mountIcon}</span>
+              <span style="width:9px;height:9px;border-radius:50%;background:${statusColor};flex-shrink:0"></span>
+              <button class="del-btn" style="background:none;border:none;color:#fff;font-size:14px;cursor:pointer;opacity:.4;padding:0 2px;line-height:1">🗑</button>
             `;
-            row.querySelector('.del-btn').addEventListener('click', e => {
-              e.stopPropagation();
-              deleteDevice(dev.id);
-            });
-            row.addEventListener('click', () => {
-              selectFloorInScene(dev.floorIndex);
-              pulseDevice(dev.id);
-            });
+            row.querySelector('.del-btn').addEventListener('click', ev => { ev.stopPropagation(); deleteDevice(dev.id); });
+            row.addEventListener('click', () => { selectFloorInScene(dev.floorIndex); pulseDevice(dev.id); });
             list.appendChild(row);
           });
         });
@@ -363,27 +982,66 @@
 
 
       // ── MOUSE EVENTS ──
+      const tooltip = document.getElementById('tooltip');
+      const ctxMenu = document.getElementById('ctx-menu');
+
       renderer.domElement.addEventListener('mousemove', (e) => {
+        if (dragState && dragState.active) return;
+
         mouse.x =  (e.clientX / canvasW())  * 2 - 1;
         mouse.y = -(e.clientY / window.innerHeight) * 2 + 1;
         raycaster.setFromCamera(mouse, camera);
-        const hits = raycaster.intersectObjects(getSlabMeshes());
 
-        if (hoveredSlab) {
-          const fi = hoveredSlab.userData.floorIndex;
-          if (fi !== selectedFloor)
-            hoveredSlab.material.color.setHex(SLAB_COLOR_DEFAULT[fi % 2]);
-          hoveredSlab = null;
+        const hitboxes = getDeviceHitboxes();
+        const devHits  = hitboxes.length ? raycaster.intersectObjects(hitboxes, false) : [];
+
+        let hitDevice = false;
+        let hitSlab   = false;
+
+        if (devHits.length > 0) {
+          hitDevice = true;
+          const devId  = devHits[0].object.userData.deviceId;
+          const device = window.devices.find(d => d.id === devId);
+          const type   = DEVICE_TYPES.find(t => t.id === device.typeId);
+          const pillColor   = device.status === 'online' ? '#1D9E75' : device.status === 'warning' ? '#EF9F27' : '#666';
+          const mountLabel  = device.mountType === 'exterior' ? 'Ngoài tường' : device.mountType === 'interior' ? 'Trong tường' : 'Trên sàn';
+          tooltip.innerHTML = `
+            <div>${type.icon} ${type.label} <span style="color:#888">#${device.id}</span></div>
+            <div style="color:#aaa">Tầng ${device.floorIndex + 1}${device.heightM != null ? ' · ' + device.heightM + 'm' : ''}</div>
+            <div style="color:#64748b;font-size:11px">${mountLabel}</div>
+            <div style="margin-top:2px"><span style="background:${pillColor};border-radius:99px;padding:1px 8px;font-size:11px">${device.status}</span></div>
+            <div style="color:#3a3a55;font-size:10px;margin-top:4px">Kéo để di chuyển</div>
+          `;
+          tooltip.style.left = (e.clientX + 14) + 'px';
+          tooltip.style.top  = (e.clientY + 10) + 'px';
+          tooltip.style.display = 'block';
+          if (hoveredSlab) {
+            const fi = hoveredSlab.userData.floorIndex;
+            if (fi !== selectedFloor) hoveredSlab.material.color.setHex(SLAB_COLOR_DEFAULT[fi % 2]);
+            hoveredSlab = null;
+          }
+        } else {
+          tooltip.style.display = 'none';
+          const hits = raycaster.intersectObjects(getSlabMeshes());
+          if (hoveredSlab) {
+            const fi = hoveredSlab.userData.floorIndex;
+            if (fi !== selectedFloor) hoveredSlab.material.color.setHex(SLAB_COLOR_DEFAULT[fi % 2]);
+            hoveredSlab = null;
+          }
+          if (hits.length > 0) {
+            hitSlab = true;
+            const m = hits[0].object;
+            if (m.userData.floorIndex !== selectedFloor) m.material.color.setHex(SLAB_COLOR_HOVER);
+            hoveredSlab = m;
+          }
         }
-        if (hits.length > 0) {
-          const mesh = hits[0].object;
-          if (mesh.userData.floorIndex !== selectedFloor)
-            mesh.material.color.setHex(SLAB_COLOR_HOVER);
-          hoveredSlab = mesh;
-        }
+
+        renderer.domElement.style.cursor = hitDevice ? 'grab' : hitSlab ? 'crosshair' : 'default';
       });
 
+      // Regular click — floor selection (guard suppressNextClick)
       renderer.domElement.addEventListener('click', (e) => {
+        if (suppressNextClick) { suppressNextClick = false; return; }
         if (e.shiftKey) return;
         mouse.x =  (e.clientX / canvasW())  * 2 - 1;
         mouse.y = -(e.clientY / window.innerHeight) * 2 + 1;
@@ -391,12 +1049,10 @@
         const hits = raycaster.intersectObjects(getSlabMeshes());
 
         if (selectedFloor !== null)
-          window.floors[selectedFloor].slab.material.color
-            .setHex(SLAB_COLOR_DEFAULT[selectedFloor % 2]);
+          window.floors[selectedFloor].slab.material.color.setHex(SLAB_COLOR_DEFAULT[selectedFloor % 2]);
 
         if (hits.length > 0) {
-          const fi = hits[0].object.userData.floorIndex;
-          selectedFloor = fi;
+          selectedFloor = hits[0].object.userData.floorIndex;
           hits[0].object.material.color.setHex(SLAB_COLOR_SELECTED);
         } else {
           selectedFloor = null;
@@ -405,70 +1061,212 @@
         updateHUD();
       });
 
+      // Shift+click fallback placement on floor or wall
       renderer.domElement.addEventListener('click', (e) => {
         if (!e.shiftKey) return;
         mouse.x =  (e.clientX / canvasW())  * 2 - 1;
         mouse.y = -(e.clientY / window.innerHeight) * 2 + 1;
         raycaster.setFromCamera(mouse, camera);
-        const hits = raycaster.intersectObjects(getSlabMeshes());
+        const hits = raycaster.intersectObjects(getAllSurfaces(), false);
         if (!hits.length) return;
-
         const hit = hits[0];
-        const floorIndex = hit.object.userData.floorIndex;
-        const type = DEVICE_TYPES.find(t => t.id === activeTypeId);
-
-        const geo = type.geo === 'sphere'
-          ? new THREE.SphereGeometry(0.28, 14, 14)
-          : new THREE.BoxGeometry(0.45, 0.45, 0.45);
-        const mat = new THREE.MeshLambertMaterial({ color: type.color });
-        const mesh = new THREE.Mesh(geo, mat);
-        mesh.position.set(hit.point.x, hit.point.y + 0.35, hit.point.z);
-        mesh.userData = { type: 'device', deviceId: deviceIdCounter };
-        scene.add(mesh);
-
-        const labelDiv = document.createElement('div');
-        labelDiv.textContent = type.label;
-        Object.assign(labelDiv.style, {
-          background: 'rgba(0,0,0,0.7)', color: '#fff', fontSize: '10px',
-          padding: '2px 6px', borderRadius: '10px',
-          borderLeft: `2.5px solid ${type.color}`,
-        });
-        const labelObj = new CSS2DObject(labelDiv);
-        labelObj.position.set(0, 0.65, 0);
-        mesh.add(labelObj);
-
-        const device = {
-          id: deviceIdCounter++, typeId: activeTypeId, floorIndex,
-          position: mesh.position.clone(), mesh, labelObj, status: 'online',
-        };
-        window.devices.push(device);
-        window.floors[floorIndex].devices.push(device.id);
-
-        updateHUD();
-        updateSidebar();
-      });
-
-      window.addEventListener('keydown', (e) => {
-        if (e.key === 'Escape' && selectedFloor !== null) {
-          window.floors[selectedFloor].slab.material.color
-            .setHex(SLAB_COLOR_DEFAULT[selectedFloor % 2]);
-          selectedFloor = null;
-          updateHUD();
+        const device = placeDevice(activeTypeId, hit.point, hit.object, hit.face.normal);
+        if (device) {
+          const type = DEVICE_TYPES.find(t => t.id === activeTypeId);
+          showToast(`${type.icon} ${type.label} đặt tại ${device.heightM}m`, 'success');
         }
       });
+
+      // Context menu
+      renderer.domElement.addEventListener('contextmenu', (e) => {
+        e.preventDefault();
+        mouse.x =  (e.clientX / canvasW())  * 2 - 1;
+        mouse.y = -(e.clientY / window.innerHeight) * 2 + 1;
+        raycaster.setFromCamera(mouse, camera);
+        const hitboxes = getDeviceHitboxes();
+        const hits = hitboxes.length ? raycaster.intersectObjects(hitboxes, false) : [];
+        if (hits.length > 0) {
+          const devId = hits[0].object.userData.deviceId;
+          ctxMenu.innerHTML = `
+            <div class="ctx-item" data-action="online"  data-id="${devId}">Set Online</div>
+            <div class="ctx-item" data-action="warning" data-id="${devId}">Set Warning</div>
+            <div class="ctx-item" data-action="offline" data-id="${devId}">Set Offline</div>
+            <div class="ctx-item" data-action="delete"  data-id="${devId}" style="color:#E24B4A;border-top:0.5px solid rgba(255,255,255,0.12);margin-top:4px;padding-top:8px">── Delete</div>
+          `;
+          ctxMenu.style.left = e.clientX + 'px';
+          ctxMenu.style.top  = e.clientY + 'px';
+          ctxMenu.style.display = 'block';
+        } else {
+          ctxMenu.style.display = 'none';
+        }
+      });
+
+      ctxMenu.addEventListener('click', (e) => {
+        e.stopPropagation();
+        const item = e.target.closest('.ctx-item');
+        if (!item) return;
+        const id = parseInt(item.dataset.id);
+        if (item.dataset.action === 'delete') deleteDevice(id);
+        else setStatus(id, item.dataset.action);
+        ctxMenu.style.display = 'none';
+      });
+
+      document.addEventListener('click', () => { ctxMenu.style.display = 'none'; });
+
+      window.addEventListener('keydown', (e) => {
+        if (e.key === 'Escape') {
+          ctxMenu.style.display = 'none';
+          if (dragState) { cancelDrag(); return; }
+          if (selectedFloor !== null) {
+            window.floors[selectedFloor].slab.material.color.setHex(SLAB_COLOR_DEFAULT[selectedFloor % 2]);
+            selectedFloor = null;
+            updateHUD();
+          }
+        }
+      });
+
+      window.addEventListener('blur', () => { if (dragState) cancelDrag(); });
 
 
       // ── RENDER LOOP ──
       function animate() {
         requestAnimationFrame(animate);
         controls.update();
+        const t = Date.now() / 400;
+        window.devices.forEach(d => {
+          if (d.status === 'warning') {
+            const intensity = 0.35 + 0.35 * Math.sin(t);
+            getAllMeshes(d.group).forEach(m => {
+              m.material.emissiveIntensity = intensity;
+            });
+          }
+        });
         renderer.render(scene, camera);
         css2dRenderer.render(scene, camera);
       }
       animate();
 
+
+      // ── TOAST ──
+      function showToast(msg, type = 'info') {
+        const bg = type === 'success' ? '#0F6E56' : type === 'error' ? '#A32D2D' : '#1e1e2e';
+        const pill = document.createElement('div');
+        pill.textContent = msg;
+        Object.assign(pill.style, {
+          background: bg, color: '#fff', fontSize: '12px',
+          padding: '7px 16px', borderRadius: '99px',
+          opacity: '0', transition: 'opacity 150ms', pointerEvents: 'none',
+        });
+        document.getElementById('toast-container').appendChild(pill);
+        requestAnimationFrame(() => { pill.style.opacity = '1'; });
+        setTimeout(() => { pill.style.opacity = '0'; setTimeout(() => pill.remove(), 150); }, 2500);
+      }
+
+
+      // ── SERIALIZATION ──
+      function serializeLayout() {
+        return JSON.stringify({
+          version: 3, floors: FLOORS,
+          devices: window.devices.map(d => ({
+            id: d.id, typeId: d.typeId, floorIndex: d.floorIndex,
+            position: {
+              x: +d.group.position.x.toFixed(3),
+              y: +d.group.position.y.toFixed(3),
+              z: +d.group.position.z.toFixed(3),
+            },
+            status: d.status,
+            heightM:       d.heightM       ?? +(d.group.position.y.toFixed(2)),
+            mountType:     d.mountType     ?? 'floor',
+            surfaceNormal: d.surfaceNormal ?? null,
+            rotation:      d.rotation      ?? { x: 0, y: 0, z: 0 },
+          }))
+        });
+      }
+
+      function autoSave() { localStorage.setItem('bdm-layout', serializeLayout()); }
+
+
+      // ── RESTORE ──
+      function restoreLayout(data) {
+        window.devices.forEach(d => {
+          d.group.remove(d.labelObj);
+          scene.remove(d.group);
+          disposeGroup(d.group);
+        });
+        window.devices = [];
+        window.floors.forEach(f => { f.devices = []; });
+        deviceIdCounter = 1;
+
+        let maxId = 0;
+        data.devices.forEach(entry => {
+          const type = DEVICE_TYPES.find(t => t.id === entry.typeId);
+          if (!type || entry.floorIndex < 0 || entry.floorIndex >= FLOORS) return;
+
+          const { group, hitbox } = buildDeviceMesh(entry.typeId);
+          group.position.set(entry.position.x, entry.position.y, entry.position.z);
+          if (entry.rotation) {
+            group.rotation.set(entry.rotation.x, entry.rotation.y, entry.rotation.z);
+          }
+          group.userData = { type: 'device', deviceId: entry.id };
+          hitbox.userData = { type: 'device', deviceId: entry.id };
+          scene.add(group);
+
+          const labelDiv = document.createElement('div');
+          labelDiv.textContent = type.label;
+          Object.assign(labelDiv.style, {
+            background: 'rgba(0,0,0,0.7)', color: '#fff', fontSize: '10px',
+            padding: '2px 6px', borderRadius: '10px',
+            borderLeft: `2.5px solid ${type.color}`,
+          });
+          const labelObj = new CSS2DObject(labelDiv);
+          labelObj.position.set(0, 0.55, 0);
+          group.add(labelObj);
+
+          const device = {
+            id: entry.id, typeId: entry.typeId, floorIndex: entry.floorIndex,
+            group, hitbox, labelObj, status: entry.status ?? 'online',
+            heightM:       entry.heightM       ?? +(entry.position.y.toFixed(2)),
+            mountType:     entry.mountType     ?? 'floor',
+            surfaceNormal: entry.surfaceNormal ?? null,
+            rotation:      entry.rotation      ?? { x: 0, y: 0, z: 0 },
+          };
+          window.devices.push(device);
+          window.floors[entry.floorIndex].devices.push(device.id);
+
+          // Apply status visuals
+          const s = device.status;
+          if (s === 'online')       setGroupEmissive(group, '#1D9E75', 0.4);
+          else if (s === 'warning') { setGroupEmissive(group, '#EF9F27', 0.6); }
+          else                      { setGroupEmissive(group, '#000000', 0); setGroupOpacity(group, 0.35, true); }
+
+          maxId = Math.max(maxId, entry.id);
+        });
+
+        deviceIdCounter = maxId + 1;
+        updateSidebar(); updateHUD();
+      }
+
+
+      // ── AUTO-RESTORE ──
+      const saved = localStorage.getItem('bdm-layout');
+      if (saved) {
+        try {
+          const data = JSON.parse(saved);
+          if (data.version >= 1) {
+            restoreLayout(data);
+            showToast('Layout restored — ' + data.devices.length + ' devices', 'success');
+          }
+        } catch(e) { localStorage.removeItem('bdm-layout'); }
+      }
+
     });
   </script>
 </head>
-<body></body>
+<body>
+  <div id="drag-cursor"></div>
+  <div id="drop-hint"></div>
+  <div id="tooltip" style="position:absolute;pointer-events:none;display:none;background:#1e1e2e;border:0.5px solid rgba(255,255,255,0.12);border-radius:8px;padding:0;font-size:12px;color:white;line-height:1.6;z-index:100;overflow:hidden;"></div>
+  <div id="ctx-menu" style="position:absolute;display:none;background:#1e1e2e;border:0.5px solid rgba(255,255,255,0.12);border-radius:8px;padding:4px 0;font-size:12px;color:white;z-index:200;min-width:140px;"></div>
+  <div id="toast-container" style="position:fixed;bottom:24px;left:50%;transform:translateX(-50%);z-index:300;display:flex;flex-direction:column;gap:6px;align-items:center;pointer-events:none;"></div>
+</body>
 </html>
