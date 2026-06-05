@@ -169,6 +169,82 @@
         return new THREE.Color(`hsl(${h},90%,65%)`);
       }
 
+      // ── DOOR HELPER ──
+      function createDoor(floorIndex, doorX, doorZ, isXWall) {
+        const doorBaseY = floorIndex * FLOOR_HEIGHT + SLAB_H;
+        const DW = 1.2, DH = 2.2, FT = 0.12, FD = 0.25;
+        const doorCenterY = doorBaseY + DH / 2;
+        const frameMat = new THREE.MeshStandardMaterial({ color: 0x1e4d6e, roughness: 0.2, metalness: 0.85 });
+        const panelMat = new THREE.MeshStandardMaterial({ color: 0x2a6090, transparent: true, opacity: 0.32, roughness: 0.1, metalness: 0.9 });
+        const pieces = isXWall ? [
+          { geo: new THREE.BoxGeometry(FD, DH, FT),           mat: frameMat, x: doorX, y: doorCenterY,              z: doorZ - DW/2 - FT/2 },
+          { geo: new THREE.BoxGeometry(FD, DH, FT),           mat: frameMat, x: doorX, y: doorCenterY,              z: doorZ + DW/2 + FT/2 },
+          { geo: new THREE.BoxGeometry(FD, FT, DW + 2*FT),   mat: frameMat, x: doorX, y: doorBaseY + DH + FT/2,   z: doorZ               },
+          { geo: new THREE.BoxGeometry(0.05, DH, DW),         mat: panelMat, x: doorX, y: doorCenterY,              z: doorZ               },
+        ] : [
+          { geo: new THREE.BoxGeometry(FT, DH, FD),           mat: frameMat, x: doorX - DW/2 - FT/2, y: doorCenterY,            z: doorZ },
+          { geo: new THREE.BoxGeometry(FT, DH, FD),           mat: frameMat, x: doorX + DW/2 + FT/2, y: doorCenterY,            z: doorZ },
+          { geo: new THREE.BoxGeometry(DW + 2*FT, FT, FD),   mat: frameMat, x: doorX,               y: doorBaseY + DH + FT/2,  z: doorZ },
+          { geo: new THREE.BoxGeometry(DW, DH, 0.05),         mat: panelMat, x: doorX,               y: doorCenterY,            z: doorZ },
+        ];
+        return pieces.map(({ geo, mat, x, y, z }) => {
+          const m = new THREE.Mesh(geo, mat);
+          m.position.set(x, y, z);
+          m.userData = { type: 'door', floorIndex };
+          scene.add(m);
+          return m;
+        });
+      }
+
+      // ── STAIRS HELPER ──
+      function createStairs(floorIndex) {
+        const baseY   = floorIndex * FLOOR_HEIGHT + SLAB_H;
+        const NUM_S   = 15;
+        const STEP_H  = wallH / NUM_S;
+        const STEP_D  = 0.25;
+        const STAIR_W = 1.3;
+        const SX      = -5.2;
+        const SZ0     = -4.35;
+        const RAIL_H  = 0.9;
+        const stepMat = new THREE.MeshStandardMaterial({ color: 0x1a3a5c, roughness: 0.3, metalness: 0.7 });
+        const railMat = new THREE.MeshStandardMaterial({ color: 0x2a6090, roughness: 0.1, metalness: 0.95 });
+        const meshes  = [];
+        for (let s = 0; s < NUM_S; s++) {
+          const step = new THREE.Mesh(
+            new THREE.BoxGeometry(STAIR_W, STEP_H, STEP_D),
+            stepMat.clone()
+          );
+          step.position.set(SX, baseY + s * STEP_H + STEP_H / 2, SZ0 + s * STEP_D + STEP_D / 2);
+          step.userData = { type: 'stair', floorIndex };
+          scene.add(step);
+          meshes.push(step);
+        }
+        // Posts every 3 steps
+        const postGeo = new THREE.BoxGeometry(0.05, RAIL_H, 0.05);
+        for (let s = 0; s < NUM_S; s += 3) {
+          const py = baseY + s * STEP_H + RAIL_H / 2;
+          const pz = SZ0 + s * STEP_D;
+          [-1, 1].forEach(side => {
+            const post = new THREE.Mesh(postGeo.clone(), railMat.clone());
+            post.position.set(SX + side * (STAIR_W / 2 - 0.07), py, pz);
+            post.userData = { type: 'stair', floorIndex };
+            scene.add(post);
+            meshes.push(post);
+          });
+        }
+        // Handrail bars (slanted along stair run)
+        const totalLen = NUM_S * STEP_D;
+        const avgH = baseY + (NUM_S / 2) * STEP_H + RAIL_H;
+        [-1, 1].forEach(side => {
+          const bar = new THREE.Mesh(new THREE.BoxGeometry(0.05, 0.05, totalLen), railMat.clone());
+          bar.position.set(SX + side * (STAIR_W / 2 - 0.07), avgH, SZ0 + totalLen / 2);
+          bar.userData = { type: 'stair', floorIndex };
+          scene.add(bar);
+          meshes.push(bar);
+        });
+        return meshes;
+      }
+
       for (let i = 0; i < FLOORS; i++) {
         const slabGeo = new THREE.BoxGeometry(12, SLAB_H, 9);
         const slabY   = i * FLOOR_HEIGHT + SLAB_H / 2;
@@ -213,7 +289,29 @@
           scene.add(wall);
           return wall;
         });
-        window.floors[i] = { index: i, slab, walls, edgeLines, ambientLight: floorLight, devices: [] };
+        // ── PARTITION WALLS (rooms) ──
+        const partMat = new THREE.MeshStandardMaterial({ color: 0x0a1f30, transparent: true, opacity: 0.38, roughness: 0.2, metalness: 0.6 });
+        const partitions = [
+          { geo: new THREE.BoxGeometry(0.1, wallH, 9),  x: 0, z: 0 },  // vertical split
+          { geo: new THREE.BoxGeometry(12,  wallH, 0.1), x: 0, z: 0 },  // horizontal split
+        ].map(({ geo, x, z }) => {
+          const p = new THREE.Mesh(geo, partMat.clone());
+          p.position.set(x, wallY, z);
+          p.userData = { type: 'partition', floorIndex: i };
+          scene.add(p);
+          return p;
+        });
+
+        // ── DOORS ──
+        const doors = [
+          ...createDoor(i,  2.5,  4.41, false),  // front wall (z=+4.5)
+          ...createDoor(i, -5.2, -1.0,  true ),  // left wall  (x=-6)
+        ];
+
+        // ── STAIRS ──
+        const stairs = createStairs(i);
+
+        window.floors[i] = { index: i, slab, walls, partitions, doors, stairs, edgeLines, ambientLight: floorLight, devices: [] };
       }
 
       // ── SELECTION STATE ──
@@ -225,7 +323,7 @@
       const mouse     = new THREE.Vector2();
 
       function getSlabMeshes()  { return window.floors.map(f => f.slab); }
-      function getWallMeshes()  { return window.floors.flatMap(f => f.walls); }
+      function getWallMeshes()  { return window.floors.flatMap(f => [...f.walls, ...(f.partitions ?? [])]); }
       function getAllSurfaces() { return [...getSlabMeshes(), ...getWallMeshes()]; }
       function getDeviceHitboxes() { return window.devices.map(d => d.hitbox); }
 
@@ -274,60 +372,131 @@
       }
 
 
-      // ── FOV CONE ──
+      // ── FOV WALL-BLOCKED FAN ──
+      // Inner faces of the 4 outer walls (XZ segments, same for all floors)
+      const FOV_WALL_SEGS = [
+        { x1: -5.91, z1: -4.5,  x2: -5.91, z2:  4.5  }, // left inner
+        { x1:  5.91, z1: -4.5,  x2:  5.91, z2:  4.5  }, // right inner
+        { x1: -5.91, z1:  4.41, x2:  5.91, z2:  4.41 }, // front inner
+        { x1: -5.91, z1: -4.41, x2:  5.91, z2: -4.41 }, // back inner
+        { x1:  0,    z1: -4.5,  x2:  0,    z2:  4.5  }, // vertical partition
+        { x1: -5.91, z1:  0,    x2:  5.91, z2:  0    }, // horizontal partition
+      ];
+
+      function raySegIntersect2D(ox, oz, dx, dz, x1, z1, x2, z2) {
+        const ex = x2 - x1, ez = z2 - z1;
+        const denom = dx * ez - dz * ex;
+        if (Math.abs(denom) < 1e-10) return Infinity;
+        const t = ((x1 - ox) * ez - (z1 - oz) * ex) / denom;
+        const s = ((x1 - ox) * dz - (z1 - oz) * dx) / denom;
+        if (t < 0 || s < 0 || s > 1) return Infinity;
+        return t;
+      }
+
+      function rebuildFOVFan(device) {
+        const t = DEVICE_TYPES.find(d => d.id === device.typeId);
+        if (!t || !t.hasFOV || !device.fovMesh) return;
+
+        device.group.updateMatrixWorld(true);
+
+        // World-space FOV center direction (local +X of fovCone after all transforms)
+        const worldFwd = new THREE.Vector3(1, 0, 0).transformDirection(device.fovCone.matrixWorld);
+        const fLen = Math.sqrt(worldFwd.x * worldFwd.x + worldFwd.z * worldFwd.z);
+        const fwdX = fLen > 0.001 ? worldFwd.x / fLen : 1;
+        const fwdZ = fLen > 0.001 ? worldFwd.z / fLen : 0;
+
+        const halfAngle = THREE.MathUtils.degToRad(t.fovAngle / 2);
+        const tilt = device.fovTilt ?? 0;
+        const range = t.fovRange * Math.max(0.05, Math.cos(tilt));
+        const NUM_RAYS = 72;
+        const devX = device.group.position.x;
+        const devZ = device.group.position.z;
+
+        // Build fan vertices in local space (relative to device position)
+        const verts = [0, 0, 0]; // origin
+        for (let i = 0; i <= NUM_RAYS; i++) {
+          const a = -halfAngle + (2 * halfAngle * i / NUM_RAYS);
+          // Rotate forward direction by angle a around world Y (Three.js Ry convention)
+          const c = Math.cos(a), s = Math.sin(a);
+          const rayX = c * fwdX + s * fwdZ;
+          const rayZ = -s * fwdX + c * fwdZ;
+
+          let dist = range;
+          for (const wall of FOV_WALL_SEGS) {
+            const d = raySegIntersect2D(devX, devZ, rayX, rayZ,
+              wall.x1, wall.z1, wall.x2, wall.z2);
+            if (d < dist) dist = d;
+          }
+          verts.push(rayX * dist, 0, rayZ * dist);
+        }
+
+        const geo = new THREE.BufferGeometry();
+        geo.setAttribute('position', new THREE.Float32BufferAttribute(new Float32Array(verts), 3));
+        const idx = [];
+        for (let i = 1; i <= NUM_RAYS; i++) idx.push(0, i, i + 1);
+        geo.setIndex(idx);
+
+        device.fovMesh.geometry.dispose();
+        device.fovMesh.geometry = geo;
+        device.fovMesh.position.set(devX, device.group.position.y, devZ);
+      }
+
       function buildFOVCone(device) {
         const t = DEVICE_TYPES.find(d => d.id === device.typeId);
         if (!t || !t.hasFOV) return;
 
-        const angleRad   = THREE.MathUtils.degToRad(t.fovAngle / 2);
-        const range      = t.fovRange;
-        const baseRadius = range * Math.tan(angleRad);
-
-        // Flip cone so apex (tip) is at origin and base (wide end) opens outward along +Y
-        const geo = new THREE.ConeGeometry(baseRadius, range, 32, 1, true);
-        geo.rotateX(Math.PI);           // apex → bottom, base → top
-        geo.translate(0, range / 2, 0); // apex to origin, base to +Y=range
-
-        const mat = new THREE.MeshBasicMaterial({
-          color: new THREE.Color(t.color),
-          transparent: true, opacity: 0.13,
-          side: THREE.DoubleSide, depthWrite: false,
-        });
-        const cone = new THREE.Mesh(geo, mat);
-
-        const ringGeo = new THREE.RingGeometry(Math.max(0, baseRadius - 0.05), baseRadius, 32);
-        ringGeo.translate(0, range, 0);
-        const ring = new THREE.Mesh(ringGeo, new THREE.MeshBasicMaterial({
-          color: t.color, side: THREE.DoubleSide, transparent: true, opacity: 0.5,
-        }));
-        cone.add(ring);
-
-        // Tilt cone from +Y → +X (camera forward in device space)
-        cone.rotation.z = -Math.PI / 2;
-
-        // coneWrapper handles fovDirection rotation around Y AFTER the Z-tilt.
-        // If rotation.y and rotation.z are on the same object (XYZ Euler order),
-        // the Y rotation is applied first and has no effect on the cone axis.
-        // Using a parent wrapper ensures: world = Ry(fovDir) * Rz(-90°) * geometry.
+        // Empty wrapper — keeps the transform hierarchy for updateFOVRotation
         const coneWrapper = new THREE.Group();
-        coneWrapper.add(cone);
-        coneWrapper.visible = window.showFOV;
         device.group.add(coneWrapper);
         device.fovCone = coneWrapper;
         device.fovDirection = device.fovDirection ?? 0;
+
+        // Flat fan mesh added to scene (not device.group) so it renders in world space
+        const fanMat = new THREE.MeshBasicMaterial({
+          color: new THREE.Color(t.color),
+          transparent: true, opacity: 0.18,
+          side: THREE.DoubleSide, depthWrite: false,
+        });
+        const fovMesh = new THREE.Mesh(new THREE.BufferGeometry(), fanMat);
+        fovMesh.visible = window.showFOV;
+        fovMesh.renderOrder = 1;
+        scene.add(fovMesh);
+        device.fovMesh = fovMesh;
+
         updateFOVRotation(device);
       }
 
       function updateFOVRotation(device) {
-        if (!device.fovCone) return;
+        const fd   = device.fovDirection ?? 0;
+        const tilt = device.fovTilt      ?? 0;
+
         if (device.mountType === 'floor') {
-          // Rotate the whole group so camera body faces the same direction as the cone
-          device.group.rotation.y = device.fovDirection;
-          device.fovCone.rotation.y = 0;
+          // Yaw first (world Y), then pitch around device local X  →  'YXZ' order
+          device.group.rotation.set(tilt, fd, 0, 'YXZ');
+          if (device.fovCone) device.fovCone.rotation.set(0, 0, 0);
         } else {
-          // Wall-mounted: keep wall orientation, only rotate the cone wrapper
-          device.fovCone.rotation.y = device.fovDirection;
+          // Build quaternion: yaw around world Y → align to wall → tilt around device local X
+          const applyQuat = (baseQ) => {
+            const yQuat = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), fd);
+            const mid   = yQuat.clone().multiply(baseQ);
+            const localX = new THREE.Vector3(1, 0, 0).applyQuaternion(mid);
+            const xQuat  = new THREE.Quaternion().setFromAxisAngle(localX, tilt);
+            device.group.quaternion.multiplyQuaternions(xQuat, mid);
+          };
+
+          if (device.fovCone) {
+            if (device.baseQuat) applyQuat(device.baseQuat);
+            else device.group.rotation.set(tilt, fd, 0, 'YXZ');
+            device.fovCone.rotation.set(0, 0, 0);
+          } else {
+            if (device.baseQuat) applyQuat(device.baseQuat);
+            else device.group.rotation.set(tilt, fd, 0, 'YXZ');
+          }
         }
+        // Keep device.rotation in sync so serialization captures it
+        const r = device.group.rotation;
+        device.rotation = { x: +r.x.toFixed(4), y: +r.y.toFixed(4), z: +r.z.toFixed(4) };
+        rebuildFOVFan(device);
       }
 
       // ── FOV OVERLAP CHECK (2D projection on floor plane) ──
@@ -337,10 +506,10 @@
           return t && t.hasFOV && d.status !== 'offline';
         });
 
-        // Reset all cone colors to default
+        // Reset all fan colors to default
         cams.forEach(d => {
           const t = DEVICE_TYPES.find(x => x.id === d.typeId);
-          if (d.fovCone) d.fovCone.traverse(obj => { if (obj.isMesh) obj.material.color.set(t.color); });
+          if (d.fovMesh) d.fovMesh.material.color.set(t.color);
           d.hasOverlap = false;
         });
 
@@ -357,8 +526,8 @@
             const dist = Math.sqrt(dx * dx + dz * dz);
 
             if (dist < (ta.fovRange + tb.fovRange) * 0.6) {
-              if (a.fovCone) a.fovCone.traverse(obj => { if (obj.isMesh) obj.material.color.set(0xff4444); });
-              if (b.fovCone) b.fovCone.traverse(obj => { if (obj.isMesh) obj.material.color.set(0xff4444); });
+              if (a.fovMesh) a.fovMesh.material.color.set(0xff4444);
+              if (b.fovMesh) b.fovMesh.material.color.set(0xff4444);
               a.hasOverlap = true;
               b.hasOverlap = true;
             }
@@ -374,54 +543,175 @@
       function createDeviceMesh(typeId) {
         const t = DEVICE_TYPES.find(d => d.id === typeId);
         const g = new THREE.Group();
-        const mat = new THREE.MeshStandardMaterial({
-          color: t.color, roughness: 0.3, metalness: 0.7
-        });
+        const mat = new THREE.MeshStandardMaterial({ color: t.color, roughness: 0.35, metalness: 0.65 });
+        const dark = new THREE.MeshStandardMaterial({ color: '#111', roughness: 0.1, metalness: 0.9 });
+        const white = new THREE.MeshStandardMaterial({ color: '#d8d8d8', roughness: 0.5, metalness: 0.1 });
 
-        if (t.category === 'camera') {
-          // Body: horizontal cylinder (lens barrel)
-          const body = new THREE.Mesh(
-            new THREE.CylinderGeometry(0.12, 0.14, 0.5, 12), mat);
+        if (typeId === 'cam_fixed') {
+          // Bullet camera: tapered body + sun visor + lens + bracket
+          const body = new THREE.Mesh(new THREE.CylinderGeometry(0.10, 0.13, 0.46, 14), mat);
           body.rotation.z = Math.PI / 2;
 
-          // Lens: smaller flat cylinder at front
-          const lens = new THREE.Mesh(
-            new THREE.CylinderGeometry(0.09, 0.09, 0.08, 12),
-            new THREE.MeshStandardMaterial({ color:'#111', roughness:0.1, metalness:0.9 })
+          const visor = new THREE.Mesh(new THREE.BoxGeometry(0.36, 0.03, 0.18), mat);
+          visor.position.set(0.04, 0.12, 0);
+
+          const lensHousing = new THREE.Mesh(new THREE.CylinderGeometry(0.095, 0.095, 0.07, 14), mat);
+          lensHousing.rotation.z = Math.PI / 2;
+          lensHousing.position.x = 0.27;
+
+          const lensGlass = new THREE.Mesh(new THREE.CylinderGeometry(0.065, 0.065, 0.025, 16), dark);
+          lensGlass.rotation.z = Math.PI / 2;
+          lensGlass.position.x = 0.315;
+
+          const arm = new THREE.Mesh(new THREE.BoxGeometry(0.07, 0.22, 0.07), mat);
+          arm.position.set(0, -0.2, 0);
+
+          const plate = new THREE.Mesh(new THREE.BoxGeometry(0.15, 0.07, 0.16), mat);
+          plate.position.set(0, -0.33, 0);
+
+          g.add(body, visor, lensHousing, lensGlass, arm, plate);
+
+        } else if (typeId === 'cam_ptz') {
+          // PTZ: pan base + tilt arms + camera body
+          const base = new THREE.Mesh(new THREE.CylinderGeometry(0.17, 0.17, 0.055, 18), mat);
+          base.position.y = -0.18;
+
+          const armL = new THREE.Mesh(new THREE.BoxGeometry(0.045, 0.16, 0.04), mat);
+          armL.position.set(0, -0.04, -0.12);
+          const armR = new THREE.Mesh(new THREE.BoxGeometry(0.045, 0.16, 0.04), mat);
+          armR.position.set(0, -0.04, 0.12);
+
+          const body = new THREE.Mesh(new THREE.CylinderGeometry(0.095, 0.115, 0.38, 14), mat);
+          body.rotation.z = Math.PI / 2;
+          body.position.y = 0.03;
+
+          const lensHousing = new THREE.Mesh(new THREE.CylinderGeometry(0.085, 0.085, 0.06, 14), mat);
+          lensHousing.rotation.z = Math.PI / 2;
+          lensHousing.position.set(0.22, 0.03, 0);
+
+          const lensGlass = new THREE.Mesh(new THREE.CylinderGeometry(0.060, 0.060, 0.022, 16), dark);
+          lensGlass.rotation.z = Math.PI / 2;
+          lensGlass.position.set(0.258, 0.03, 0);
+
+          g.add(base, armL, armR, body, lensHousing, lensGlass);
+
+        } else if (typeId === 'cam_dome') {
+          // Dome camera: flat plate + hemisphere + dark bubble
+          const plate = new THREE.Mesh(new THREE.CylinderGeometry(0.26, 0.28, 0.04, 24), mat);
+          plate.position.y = 0.02;
+
+          const dome = new THREE.Mesh(
+            new THREE.SphereGeometry(0.20, 18, 9, 0, Math.PI * 2, 0, Math.PI / 2), mat);
+          dome.position.y = -0.01;
+          dome.rotation.x = Math.PI; // opens downward
+
+          const bubble = new THREE.Mesh(
+            new THREE.SphereGeometry(0.145, 14, 7, 0, Math.PI * 2, 0, Math.PI / 2),
+            new THREE.MeshStandardMaterial({ color: '#0a1a22', roughness: 0.05, metalness: 0.2, transparent: true, opacity: 0.82 })
           );
-          lens.rotation.z = Math.PI / 2;
-          lens.position.x = 0.28;
+          bubble.position.y = -0.01;
+          bubble.rotation.x = Math.PI;
 
-          // Mount: small box base
-          const mount = new THREE.Mesh(
-            new THREE.BoxGeometry(0.1, 0.25, 0.1), mat);
-          mount.position.y = -0.2;
-
-          g.add(body, lens, mount);
-
-        } else if (t.category === 'sensor') {
-          if (t.id === 'smoke') {
-            // Flat disc (ceiling mount style)
-            g.add(new THREE.Mesh(
-              new THREE.CylinderGeometry(0.28, 0.28, 0.08, 20), mat));
-          } else if (t.id === 'motion') {
-            // Rounded wedge: half-sphere flattened
-            const s = new THREE.Mesh(
-              new THREE.SphereGeometry(0.22, 10, 6, 0, Math.PI*2, 0, Math.PI/2), mat);
-            g.add(s);
-          } else {
-            // Temp: thin tall box
-            g.add(new THREE.Mesh(new THREE.BoxGeometry(0.12, 0.42, 0.08), mat));
+          // Four mounting screws at edges
+          for (let i = 0; i < 4; i++) {
+            const screw = new THREE.Mesh(new THREE.SphereGeometry(0.016, 6, 6), dark);
+            const a = (i / 4) * Math.PI * 2;
+            screw.position.set(Math.cos(a) * 0.22, 0.04, Math.sin(a) * 0.22);
+            g.add(screw);
           }
+
+          g.add(plate, dome, bubble);
+
+        } else if (typeId === 'motion') {
+          // PIR sensor: trapezoid wedge + sensor window
+          const body = new THREE.Mesh(new THREE.CylinderGeometry(0.075, 0.115, 0.26, 4), white);
+          body.rotation.y = Math.PI / 4;
+
+          const window_ = new THREE.Mesh(new THREE.BoxGeometry(0.13, 0.09, 0.015),
+            new THREE.MeshStandardMaterial({ color: '#1a0a00', roughness: 0.15, metalness: 0.3 }));
+          window_.position.set(0.095, 0.02, 0);
+
+          const led = new THREE.Mesh(new THREE.SphereGeometry(0.015, 8, 8),
+            new THREE.MeshStandardMaterial({ color: '#00ff44', emissive: '#00ff44', emissiveIntensity: 0.8 }));
+          led.position.set(0.095, 0.09, 0);
+
+          g.add(body, window_, led);
+
+        } else if (typeId === 'smoke') {
+          // Smoke detector: tapered disc + dome top + LED
+          const base = new THREE.Mesh(new THREE.CylinderGeometry(0.21, 0.235, 0.05, 24), white);
+
+          const top = new THREE.Mesh(
+            new THREE.SphereGeometry(0.155, 14, 7, 0, Math.PI * 2, 0, Math.PI / 2), white);
+          top.position.y = 0.025;
+
+          const indicator = new THREE.Mesh(new THREE.SphereGeometry(0.016, 8, 8),
+            new THREE.MeshStandardMaterial({ color: '#00cc44', emissive: '#00cc44', emissiveIntensity: 0.9 }));
+          indicator.position.y = 0.178;
+
+          // Ventilation slots ring
+          const ventMat = new THREE.MeshStandardMaterial({ color: '#c8c8c8', roughness: 0.6 });
+          for (let i = 0; i < 8; i++) {
+            const slot = new THREE.Mesh(new THREE.BoxGeometry(0.03, 0.022, 0.006), ventMat);
+            const a = (i / 8) * Math.PI * 2;
+            slot.position.set(Math.cos(a) * 0.175, 0.02, Math.sin(a) * 0.175);
+            slot.rotation.y = a;
+            g.add(slot);
+          }
+
+          g.add(base, top, indicator);
+
+        } else if (typeId === 'temp') {
+          // Temperature sensor: slim body + display screen + foot
+          const body = new THREE.Mesh(new THREE.BoxGeometry(0.085, 0.36, 0.055), white);
+
+          const screen = new THREE.Mesh(new THREE.BoxGeometry(0.062, 0.14, 0.008),
+            new THREE.MeshStandardMaterial({ color: '#002233', roughness: 0.1, metalness: 0.2,
+              emissive: '#001a2b', emissiveIntensity: 0.5 }));
+          screen.position.set(0, 0.05, 0.032);
+
+          const foot = new THREE.Mesh(new THREE.BoxGeometry(0.085, 0.035, 0.115), mat);
+          foot.position.y = -0.20;
+
+          g.add(body, screen, foot);
+
+        } else if (typeId === 'ac') {
+          // Split AC indoor unit: main body + front panel + grille
+          const body = new THREE.Mesh(new THREE.BoxGeometry(0.78, 0.20, 0.24), mat);
+
+          const frontPanel = new THREE.Mesh(new THREE.BoxGeometry(0.74, 0.16, 0.015), white);
+          frontPanel.position.set(0, 0.005, 0.128);
+
+          // Outlet grille (lower front)
+          const grilleMat = new THREE.MeshStandardMaterial({ color: '#b0b0b0', roughness: 0.7 });
+          for (let i = 0; i < 5; i++) {
+            const vent = new THREE.Mesh(new THREE.BoxGeometry(0.72, 0.012, 0.01), grilleMat);
+            vent.position.set(0, -0.05 + i * 0.022, 0.128);
+            g.add(vent);
+          }
+
+          const statusLight = new THREE.Mesh(new THREE.SphereGeometry(0.012, 8, 8),
+            new THREE.MeshStandardMaterial({ color: '#00ff88', emissive: '#00ff88', emissiveIntensity: 1.0 }));
+          statusLight.position.set(0.34, 0.055, 0.13);
+
+          g.add(body, frontPanel, statusLight);
 
         } else {
-          if (t.id === 'ac') {
-            // Wide flat box with vent slits (just geometry, no actual slits)
-            g.add(new THREE.Mesh(new THREE.BoxGeometry(0.7, 0.22, 0.28), mat));
-          } else {
-            // Alarm: octagonal prism
-            g.add(new THREE.Mesh(new THREE.CylinderGeometry(0.22,0.22,0.1,8), mat));
-          }
+          // Fire alarm: red disc + strobe top + white ring
+          const disc = new THREE.Mesh(new THREE.CylinderGeometry(0.185, 0.185, 0.065, 18), mat);
+
+          const strobe = new THREE.Mesh(
+            new THREE.SphereGeometry(0.072, 10, 8, 0, Math.PI * 2, 0, Math.PI / 2),
+            new THREE.MeshStandardMaterial({ color: '#ffee00', emissive: '#ffbb00', emissiveIntensity: 0.6,
+              roughness: 0.1, metalness: 0.1 })
+          );
+          strobe.position.y = 0.033;
+
+          const ring = new THREE.Mesh(new THREE.TorusGeometry(0.185, 0.013, 8, 24), white);
+          ring.rotation.x = Math.PI / 2;
+          ring.position.y = 0.033;
+
+          g.add(disc, strobe, ring);
         }
 
         // Invisible hitbox for raycasting
@@ -488,6 +778,8 @@
           group, hitbox, labelObj, status: 'online',
           heightM, mountType, surfaceNormal,
           rotation: { x: +euler.x.toFixed(4), y: +euler.y.toFixed(4), z: +euler.z.toFixed(4) },
+          fovTilt:  0,
+          baseQuat: wallQuat ? wallQuat.clone() : null,
         };
         window.devices.push(device);
         window.floors[floorIndex].devices.push(device.id);
@@ -852,6 +1144,7 @@
           movingDevice.rotation = { x: +euler.x.toFixed(4), y: +euler.y.toFixed(4), z: +euler.z.toFixed(4) };
           window.floors[newFloorIndex].devices.push(movingDevice.id);
 
+          rebuildFOVFan(movingDevice);
           const type = DEVICE_TYPES.find(t => t.id === movingDevice.typeId);
           const mountLabel = mountType === 'exterior' ? 'ngoài' : mountType === 'interior' ? 'trong' : 'sàn';
           showToast(`${type.icon} đã di chuyển → ${newHeightM}m (${mountLabel})`, 'success');
@@ -938,7 +1231,7 @@
         window.showFOV = !window.showFOV;
         fovBtn.textContent = window.showFOV ? '📐 FOV ON' : '📐 FOV OFF';
         fovBtn.style.borderColor = window.showFOV ? '#378ADD' : '#4a5568';
-        window.devices.forEach(d => { if (d.fovCone) d.fovCone.visible = window.showFOV; });
+        window.devices.forEach(d => { if (d.fovMesh) d.fovMesh.visible = window.showFOV; });
       });
       toolbar.appendChild(fovBtn);
 
@@ -1059,6 +1352,11 @@
         dev.group.remove(dev.labelObj);
         scene.remove(dev.group);
         disposeGroup(dev.group);
+        if (dev.fovMesh) {
+          scene.remove(dev.fovMesh);
+          dev.fovMesh.geometry.dispose();
+          dev.fovMesh.material.dispose();
+        }
         window.devices.splice(idx, 1);
         const floor = window.floors[dev.floorIndex];
         floor.devices = floor.devices.filter(fid => fid !== id);
@@ -1246,6 +1544,14 @@
         renderer.domElement.style.cursor = hitDevice ? 'grab' : hitSlab ? 'crosshair' : 'default';
       });
 
+      // Scroll wheel in aiming mode → adjust tilt (pitch)
+      renderer.domElement.addEventListener('wheel', (e) => {
+        if (aimingDevice === null) return;
+        aimingDevice.fovTilt = Math.max(-Math.PI / 3, Math.min(Math.PI / 3,
+          (aimingDevice.fovTilt ?? 0) - e.deltaY * 0.0012));
+        updateFOVRotation(aimingDevice);
+      }, { passive: true });
+
       // Aim mode exit click
       renderer.domElement.addEventListener('click', (e) => {
         if (aimingDevice === null) return;
@@ -1309,6 +1615,7 @@
         if (hits.length > 0) {
           const devId = hits[0].object.userData.deviceId;
           ctxMenu.innerHTML = `
+            <div class="ctx-item" data-action="rotate"  data-id="${devId}" style="border-bottom:0.5px solid rgba(255,255,255,0.08);padding-bottom:6px;margin-bottom:4px">↻ Xoay thiết bị</div>
             <div class="ctx-item" data-action="online"  data-id="${devId}">Set Online</div>
             <div class="ctx-item" data-action="warning" data-id="${devId}">Set Warning</div>
             <div class="ctx-item" data-action="offline" data-id="${devId}">Set Offline</div>
@@ -1327,8 +1634,19 @@
         const item = e.target.closest('.ctx-item');
         if (!item) return;
         const id = parseInt(item.dataset.id);
-        if (item.dataset.action === 'delete') deleteDevice(id);
-        else setStatus(id, item.dataset.action);
+        if (item.dataset.action === 'delete') {
+          deleteDevice(id);
+        } else if (item.dataset.action === 'rotate') {
+          const dev = window.devices.find(d => d.id === id);
+          if (dev) {
+            aimingDevice = dev;
+            if (dev.fovDirection == null) dev.fovDirection = dev.group.rotation.y;
+            controls.enabled = false;
+            document.getElementById('aim-hint').style.display = 'block';
+          }
+        } else {
+          setStatus(id, item.dataset.action);
+        }
         ctxMenu.style.display = 'none';
       });
 
@@ -1411,6 +1729,7 @@
             surfaceNormal: d.surfaceNormal ?? null,
             rotation:      d.rotation      ?? { x: 0, y: 0, z: 0 },
             fovDirection:  d.fovDirection  ?? 0,
+            fovTilt:       d.fovTilt       ?? 0,
           }))
         });
       }
@@ -1424,6 +1743,11 @@
           d.group.remove(d.labelObj);
           scene.remove(d.group);
           disposeGroup(d.group);
+          if (d.fovMesh) {
+            scene.remove(d.fovMesh);
+            d.fovMesh.geometry.dispose();
+            d.fovMesh.material.dispose();
+          }
         });
         window.devices = [];
         window.floors.forEach(f => { f.devices = []; });
@@ -1454,14 +1778,21 @@
           labelObj.position.set(0, 0.55, 0);
           group.add(labelObj);
 
+          const restoredSN = entry.surfaceNormal ?? null;
+          const restoredBaseQuat = restoredSN
+            ? computeWallRotation(new THREE.Vector3(restoredSN.x, restoredSN.y, restoredSN.z))
+            : null;
+
           const device = {
             id: entry.id, typeId: entry.typeId, floorIndex: entry.floorIndex,
             group, hitbox, labelObj, status: entry.status ?? 'online',
             heightM:       entry.heightM       ?? +(entry.position.y.toFixed(2)),
             mountType:     entry.mountType     ?? 'floor',
-            surfaceNormal: entry.surfaceNormal ?? null,
+            surfaceNormal: restoredSN,
             rotation:      entry.rotation      ?? { x: 0, y: 0, z: 0 },
             fovDirection:  entry.fovDirection  ?? 0,
+            fovTilt:       entry.fovTilt       ?? 0,
+            baseQuat:      restoredBaseQuat,
           };
           buildFOVCone(device);
           window.devices.push(device);
@@ -1499,7 +1830,7 @@
 <body>
   <div id="drag-cursor"></div>
   <div id="drop-hint"></div>
-  <div id="aim-hint" style="position:fixed;bottom:60px;left:50%;transform:translateX(-50%);background:rgba(55,138,221,0.9);color:#fff;font-size:12px;padding:7px 18px;border-radius:99px;z-index:50;pointer-events:none;display:none;">Drag to rotate camera direction — press Escape to exit</div>
+  <div id="aim-hint" style="position:fixed;bottom:60px;left:50%;transform:translateX(-50%);background:rgba(55,138,221,0.9);color:#fff;font-size:12px;padding:7px 18px;border-radius:99px;z-index:50;pointer-events:none;display:none;">Di chuột: hướng ngang &nbsp;|&nbsp; Cuộn chuột: góc lên/xuống &nbsp;|&nbsp; Click: xong &nbsp;|&nbsp; Esc: thoát</div>
   <div id="tooltip" style="position:absolute;pointer-events:none;display:none;background:#1e1e2e;border:0.5px solid rgba(255,255,255,0.12);border-radius:8px;padding:0;font-size:12px;color:white;line-height:1.6;z-index:100;overflow:hidden;"></div>
   <div id="ctx-menu" style="position:absolute;display:none;background:#1e1e2e;border:0.5px solid rgba(255,255,255,0.12);border-radius:8px;padding:4px 0;font-size:12px;color:white;z-index:200;min-width:140px;"></div>
   <div id="toast-container" style="position:fixed;bottom:24px;left:50%;transform:translateX(-50%);z-index:300;display:flex;flex-direction:column;gap:6px;align-items:center;pointer-events:none;"></div>
