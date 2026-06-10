@@ -469,28 +469,36 @@
       function updateFOVRotation(device) {
         const fd   = device.fovDirection ?? 0;
         const tilt = device.fovTilt      ?? 0;
+        const roll = device.fovRoll      ?? 0;
 
         if (device.mountType === 'floor') {
-          // Yaw first (world Y), then pitch around device local X  →  'YXZ' order
-          device.group.rotation.set(tilt, fd, 0, 'YXZ');
+          // Yaw (world Y) → pitch (local X) → roll (local Z)  →  'YXZ' order
+          device.group.rotation.set(tilt, fd, roll, 'YXZ');
           if (device.fovCone) device.fovCone.rotation.set(0, 0, 0);
         } else {
-          // Build quaternion: yaw around world Y → align to wall → tilt around device local X
+          // Build quaternion: yaw around world Y → align to wall → pitch (local X) → roll (local Z)
           const applyQuat = (baseQ) => {
-            const yQuat = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), fd);
-            const mid   = yQuat.clone().multiply(baseQ);
+            const yQuat  = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), fd);
+            const mid    = yQuat.clone().multiply(baseQ);
             const localX = new THREE.Vector3(1, 0, 0).applyQuaternion(mid);
             const xQuat  = new THREE.Quaternion().setFromAxisAngle(localX, tilt);
-            device.group.quaternion.multiplyQuaternions(xQuat, mid);
+            const afterPitch = xQuat.clone().multiply(mid);
+            if (roll !== 0) {
+              const localZ = new THREE.Vector3(0, 0, 1).applyQuaternion(afterPitch);
+              const zQuat  = new THREE.Quaternion().setFromAxisAngle(localZ, roll);
+              device.group.quaternion.multiplyQuaternions(zQuat, afterPitch);
+            } else {
+              device.group.quaternion.multiplyQuaternions(xQuat, mid);
+            }
           };
 
           if (device.fovCone) {
             if (device.baseQuat) applyQuat(device.baseQuat);
-            else device.group.rotation.set(tilt, fd, 0, 'YXZ');
+            else device.group.rotation.set(tilt, fd, roll, 'YXZ');
             device.fovCone.rotation.set(0, 0, 0);
           } else {
             if (device.baseQuat) applyQuat(device.baseQuat);
-            else device.group.rotation.set(tilt, fd, 0, 'YXZ');
+            else device.group.rotation.set(tilt, fd, roll, 'YXZ');
           }
         }
         // Keep device.rotation in sync so serialization captures it
@@ -779,6 +787,7 @@
           heightM, mountType, surfaceNormal,
           rotation: { x: +euler.x.toFixed(4), y: +euler.y.toFixed(4), z: +euler.z.toFixed(4) },
           fovTilt:  0,
+          fovRoll:  0,
           baseQuat: wallQuat ? wallQuat.clone() : null,
         };
         window.devices.push(device);
@@ -877,8 +886,51 @@
 
 
       // ── AIM STATE ──
-      let aimingDevice = null;
+      let aimingDevice      = null;
+      let heightAdjDevice   = null;
+      let aimPrevMouse      = null;  // {x, y} — delta tracking for quaternion rotation
+      let aimGizmo          = null;  // THREE.Group — axis arrows, child of device.group
+      let aimMouseDown      = false; // true only while left button is held in aim mode
+      let aimDragMoved      = false; // true once rotation has been applied in current drag
+      let hoveredDevice     = null;  // device currently under cursor (for R shortcut)
       window.showFOV = true;
+
+      function showAimGizmo(device) {
+        hideAimGizmo();
+        const g = new THREE.Group();
+        g.name = 'aim_gizmo';
+        // 3 trục: X đỏ (forward/lens), Y xanh lá (up), Z xanh dương (right)
+        [
+          [1,0,0, 0.5, 0xff3333],
+          [0,1,0, 0.5, 0x22dd44],
+          [0,0,1, 0.5, 0x3399ff],
+        ].forEach(([x,y,z,len,color]) => {
+          g.add(new THREE.ArrowHelper(
+            new THREE.Vector3(x,y,z), new THREE.Vector3(0,0,0),
+            len, color, len * 0.25, len * 0.14
+          ));
+        });
+        // Aim line dài theo trục X (hướng lens) — thấy rõ thiết bị chỉ về đâu
+        g.add(new THREE.ArrowHelper(
+          new THREE.Vector3(1,0,0), new THREE.Vector3(0,0,0),
+          1.4, 0xff8888, 0.2, 0.1
+        ));
+        device.group.add(g);
+        aimGizmo = g;
+      }
+
+      function hideAimGizmo() {
+        if (!aimGizmo) return;
+        aimGizmo.parent?.remove(aimGizmo);
+        aimGizmo.traverse(o => {
+          if (o.isMesh || o.isLine) {
+            o.geometry?.dispose();
+            if (Array.isArray(o.material)) o.material.forEach(m => m.dispose());
+            else o.material?.dispose();
+          }
+        });
+        aimGizmo = null;
+      }
 
       // ── DRAG STATE ──
       let dragState = null;
@@ -942,6 +994,24 @@
         };
         document.addEventListener('mousemove', onDragMouseMove);
         document.addEventListener('mouseup',   onDragMouseUp);
+      });
+
+      // Aim mode: track mouse button held state
+      renderer.domElement.addEventListener('mousedown', (e) => {
+        if (aimingDevice === null) return;
+        if (e.button !== 0) return;
+        aimMouseDown = true;
+        aimDragMoved = false;
+        aimPrevMouse = { x: e.clientX, y: e.clientY };
+      });
+
+      renderer.domElement.addEventListener('mouseup', (e) => {
+        if (!aimMouseDown) return;
+        aimMouseDown = false;
+        if (aimDragMoved) {
+          suppressNextClick = true;
+        }
+        aimDragMoved = false;
       });
 
       function onDragMouseMove(e) {
@@ -1072,6 +1142,11 @@
             const t = DEVICE_TYPES.find(tt => tt.id === movingDevice.typeId);
             if (t?.hasFOV) {
               aimingDevice = movingDevice;
+              movingDevice.aimQuat = movingDevice.group.quaternion.clone();
+              aimPrevMouse = null;
+              aimMouseDown = false;
+              aimDragMoved = false;
+              showAimGizmo(movingDevice);
               controls.enabled = false;
               document.getElementById('aim-hint').style.display = 'block';
             }
@@ -1128,10 +1203,20 @@
             ? { x: +worldNormal.x.toFixed(4), y: +worldNormal.y.toFixed(4), z: +worldNormal.z.toFixed(4) }
             : null;
 
+          // Giữ rotation offset tương đối với base cũ, áp lên base mới
+          const oldBase = movingDevice.baseQuat
+            ? movingDevice.baseQuat.clone()
+            : new THREE.Quaternion();
+          const relativeQ = new THREE.Quaternion()
+            .multiplyQuaternions(oldBase.clone().invert(), movingDevice.group.quaternion);
+          const newBase = wallQuat ? wallQuat.clone() : new THREE.Quaternion();
+          const preservedQuat = new THREE.Quaternion()
+            .multiplyQuaternions(newBase, relativeQ);
+
           // Update group position/rotation
           movingDevice.group.position.copy(newPos);
-          if (wallQuat) movingDevice.group.setRotationFromQuaternion(wallQuat);
-          else movingDevice.group.rotation.set(0, 0, 0);
+          movingDevice.group.setRotationFromQuaternion(preservedQuat);
+          movingDevice.baseQuat = wallQuat ? wallQuat.clone() : null;
 
           // Update floor arrays
           const oldFloor = window.floors[movingDevice.floorIndex];
@@ -1346,6 +1431,15 @@
 
       // ── DELETE DEVICE ──
       function deleteDevice(id) {
+        if (aimingDevice && aimingDevice.id === id) {
+          aimGizmo = null;
+          aimingDevice = null;
+          aimPrevMouse = null;
+          aimMouseDown = false;
+          aimDragMoved = false;
+          controls.enabled = true;
+          document.getElementById('aim-hint').style.display = 'none';
+        }
         const idx = window.devices.findIndex(d => d.id === id);
         if (idx === -1) return;
         const dev = window.devices[idx];
@@ -1467,22 +1561,45 @@
       const tooltip = document.getElementById('tooltip');
       const ctxMenu = document.getElementById('ctx-menu');
 
+      function updateAimHint(device) {
+        const fw   = new THREE.Vector3(1, 0, 0).applyQuaternion(device.aimQuat);
+        const tilt = Math.round(THREE.MathUtils.radToDeg(Math.asin(Math.max(-1, Math.min(1, fw.y)))));
+        const pan  = Math.round(THREE.MathUtils.radToDeg(device.group.rotation.y));
+        document.getElementById('aim-hint').textContent =
+          `Kéo: xoay | ↑↓: nghiêng | ←→: quay | Q·E/Cuộn: lăn | Pan:${pan}° Tilt:${tilt}° | Shift+phím: chính xác | Click/Esc: xong`;
+      }
+
       renderer.domElement.addEventListener('mousemove', (e) => {
         if (dragState && dragState.active) return;
 
         if (aimingDevice !== null) {
-          mouse.x =  (e.clientX / canvasW()) * 2 - 1;
-          mouse.y = -(e.clientY / window.innerHeight) * 2 + 1;
-          raycaster.setFromCamera(mouse, camera);
-          const plane = new THREE.Plane(new THREE.Vector3(0, 1, 0), -aimingDevice.group.position.y);
-          const target = new THREE.Vector3();
-          if (raycaster.ray.intersectPlane(plane, target)) {
-            const dx = target.x - aimingDevice.group.position.x;
-            const dz = target.z - aimingDevice.group.position.z;
-            aimingDevice.fovDirection = Math.atan2(dx, dz);
-            updateFOVRotation(aimingDevice);
+          if (aimMouseDown && aimPrevMouse !== null) {
+            const dx = e.clientX - aimPrevMouse.x;
+            const dy = e.clientY - aimPrevMouse.y;
+            const sens = 0.008;
+
+            const yawQ = new THREE.Quaternion()
+              .setFromAxisAngle(new THREE.Vector3(0, 1, 0), dx * sens);
+
+            // Device-local Z = trục nghiêng tự nhiên, không đổi theo góc nhìn camera
+            const pitchQ = new THREE.Quaternion()
+              .setFromAxisAngle(new THREE.Vector3(0, 0, 1), dy * sens);
+
+            // Yaw: world-space (premultiply), Pitch: device-local (multiply)
+            aimingDevice.aimQuat.premultiply(yawQ).multiply(pitchQ);
+            aimingDevice.group.quaternion.copy(aimingDevice.aimQuat);
+            aimingDevice.group.updateMatrixWorld(true);
+
+            const r = aimingDevice.group.rotation;
+            aimingDevice.rotation = { x: +r.x.toFixed(4), y: +r.y.toFixed(4), z: +r.z.toFixed(4) };
+            rebuildFOVFan(aimingDevice);
+            aimDragMoved = true;
+            updateAimHint(aimingDevice);
           }
-          renderer.domElement.style.cursor = 'crosshair';
+          if (aimMouseDown) {
+            aimPrevMouse = { x: e.clientX, y: e.clientY };
+          }
+          renderer.domElement.style.cursor = aimMouseDown ? 'move' : 'crosshair';
           return;
         }
 
@@ -1500,6 +1617,7 @@
           hitDevice = true;
           const devId  = devHits[0].object.userData.deviceId;
           const device = window.devices.find(d => d.id === devId);
+          hoveredDevice = device;
           const type   = DEVICE_TYPES.find(t => t.id === device.typeId);
           const pillColor   = device.status === 'online' ? '#1D9E75' : device.status === 'warning' ? '#EF9F27' : '#666';
           const mountLabel  = device.mountType === 'exterior' ? 'Ngoài tường' : device.mountType === 'interior' ? 'Trong tường' : 'Trên sàn';
@@ -1522,6 +1640,7 @@
           }
         } else {
           tooltip.style.display = 'none';
+          hoveredDevice = null;
           const hits = raycaster.intersectObjects(getSlabMeshes());
           if (hoveredSlab) {
             if (hoveredSlab.userData.floorIndex !== selectedFloor) {
@@ -1544,17 +1663,44 @@
         renderer.domElement.style.cursor = hitDevice ? 'grab' : hitSlab ? 'crosshair' : 'default';
       });
 
-      // Scroll wheel in aiming mode → adjust tilt (pitch)
+      renderer.domElement.addEventListener('mouseleave', () => { aimPrevMouse = null; });
+
+      // Scroll wheel: height adjustment mode → move up/down; aiming mode → roll
       renderer.domElement.addEventListener('wheel', (e) => {
+        if (heightAdjDevice !== null) {
+          const step = e.deltaY < 0 ? 0.05 : -0.05;
+          heightAdjDevice.group.position.y = Math.max(0.1,
+            +(heightAdjDevice.group.position.y + step).toFixed(2));
+          heightAdjDevice.heightM = heightAdjDevice.group.position.y;
+          rebuildFOVFan(heightAdjDevice);
+          updateSidebar(); updateHUD(); autoSave();
+          return;
+        }
         if (aimingDevice === null) return;
-        aimingDevice.fovTilt = Math.max(-Math.PI / 3, Math.min(Math.PI / 3,
-          (aimingDevice.fovTilt ?? 0) - e.deltaY * 0.0012));
-        updateFOVRotation(aimingDevice);
+        // Roll quanh trục +X cục bộ của thiết bị (không clamp — 360° tự do)
+        if (!aimingDevice.aimQuat) aimingDevice.aimQuat = aimingDevice.group.quaternion.clone();
+        const rollQ = new THREE.Quaternion()
+          .setFromAxisAngle(new THREE.Vector3(1, 0, 0), -e.deltaY * 0.002);
+        aimingDevice.aimQuat.multiply(rollQ);
+        aimingDevice.group.quaternion.copy(aimingDevice.aimQuat);
+        aimingDevice.group.updateMatrixWorld(true);
+        const rv = aimingDevice.group.rotation;
+        aimingDevice.rotation = { x: +rv.x.toFixed(4), y: +rv.y.toFixed(4), z: +rv.z.toFixed(4) };
+        rebuildFOVFan(aimingDevice);
+        updateAimHint(aimingDevice);
       }, { passive: true });
 
-      // Aim mode exit click
+      // Height / Aim mode exit click
       renderer.domElement.addEventListener('click', (e) => {
+        if (heightAdjDevice !== null) {
+          heightAdjDevice = null;
+          controls.enabled = true;
+          document.getElementById('height-hint').style.display = 'none';
+          renderer.domElement.style.cursor = 'default';
+          return;
+        }
         if (aimingDevice === null) return;
+        hideAimGizmo();
         aimingDevice = null;
         controls.enabled = true;
         document.getElementById('aim-hint').style.display = 'none';
@@ -1615,11 +1761,13 @@
         if (hits.length > 0) {
           const devId = hits[0].object.userData.deviceId;
           ctxMenu.innerHTML = `
-            <div class="ctx-item" data-action="rotate"  data-id="${devId}" style="border-bottom:0.5px solid rgba(255,255,255,0.08);padding-bottom:6px;margin-bottom:4px">↻ Xoay thiết bị</div>
-            <div class="ctx-item" data-action="online"  data-id="${devId}">Set Online</div>
-            <div class="ctx-item" data-action="warning" data-id="${devId}">Set Warning</div>
-            <div class="ctx-item" data-action="offline" data-id="${devId}">Set Offline</div>
-            <div class="ctx-item" data-action="delete"  data-id="${devId}" style="color:#E24B4A;border-top:0.5px solid rgba(255,255,255,0.12);margin-top:4px;padding-top:8px">── Delete</div>
+            <div class="ctx-item" data-action="rotate"   data-id="${devId}" style="border-bottom:0.5px solid rgba(255,255,255,0.08);padding-bottom:6px;margin-bottom:4px">↻ Xoay thiết bị</div>
+            <div class="ctx-item" data-action="resetrot" data-id="${devId}" style="border-bottom:0.5px solid rgba(255,255,255,0.08);padding-bottom:6px;margin-bottom:4px">↺ Reset xoay</div>
+            <div class="ctx-item" data-action="height"   data-id="${devId}" style="border-bottom:0.5px solid rgba(255,255,255,0.08);padding-bottom:6px;margin-bottom:4px">↕ Điều chỉnh độ cao</div>
+            <div class="ctx-item" data-action="online"   data-id="${devId}">Set Online</div>
+            <div class="ctx-item" data-action="warning"  data-id="${devId}">Set Warning</div>
+            <div class="ctx-item" data-action="offline"  data-id="${devId}">Set Offline</div>
+            <div class="ctx-item" data-action="delete"   data-id="${devId}" style="color:#E24B4A;border-top:0.5px solid rgba(255,255,255,0.12);margin-top:4px;padding-top:8px">── Delete</div>
           `;
           ctxMenu.style.left = e.clientX + 'px';
           ctxMenu.style.top  = e.clientY + 'px';
@@ -1640,9 +1788,36 @@
           const dev = window.devices.find(d => d.id === id);
           if (dev) {
             aimingDevice = dev;
-            if (dev.fovDirection == null) dev.fovDirection = dev.group.rotation.y;
+            dev.aimQuat = dev.group.quaternion.clone();
+            aimPrevMouse = null;
+            aimMouseDown = false;
+            aimDragMoved = false;
+            showAimGizmo(dev);
             controls.enabled = false;
             document.getElementById('aim-hint').style.display = 'block';
+          }
+        } else if (item.dataset.action === 'resetrot') {
+          const dev = window.devices.find(d => d.id === id);
+          if (dev) {
+            if (dev.baseQuat) {
+              dev.group.setRotationFromQuaternion(dev.baseQuat);
+            } else {
+              dev.group.rotation.set(0, 0, 0);
+            }
+            dev.group.updateMatrixWorld(true);
+            dev.aimQuat = dev.group.quaternion.clone();
+            const r = dev.group.rotation;
+            dev.rotation = { x: +r.x.toFixed(4), y: +r.y.toFixed(4), z: +r.z.toFixed(4) };
+            rebuildFOVFan(dev);
+            checkFOVOverlaps(); autoSave();
+            showToast('↺ Đã reset xoay', 'info');
+          }
+        } else if (item.dataset.action === 'height') {
+          const dev = window.devices.find(d => d.id === id);
+          if (dev) {
+            heightAdjDevice = dev;
+            controls.enabled = false;
+            document.getElementById('height-hint').style.display = 'block';
           }
         } else {
           setStatus(id, item.dataset.action);
@@ -1653,13 +1828,96 @@
       document.addEventListener('click', () => { ctxMenu.style.display = 'none'; });
 
       window.addEventListener('keydown', (e) => {
-        if (e.key === 'Escape') {
+        if (e.key === 'r' || e.key === 'R') {
           if (aimingDevice !== null) {
+            hideAimGizmo();
             aimingDevice = null;
+            aimMouseDown = false;
+            aimDragMoved = false;
             controls.enabled = true;
             document.getElementById('aim-hint').style.display = 'none';
             renderer.domElement.style.cursor = 'default';
+            checkFOVOverlaps(); autoSave();
+            return;
+          }
+          if (hoveredDevice !== null) {
+            aimingDevice = hoveredDevice;
+            aimingDevice.aimQuat = aimingDevice.group.quaternion.clone();
+            aimPrevMouse = null;
+            aimMouseDown = false;
+            aimDragMoved = false;
+            showAimGizmo(aimingDevice);
+            controls.enabled = false;
+            document.getElementById('aim-hint').style.display = 'block';
+            return;
+          }
+          return;
+        }
+        if (aimingDevice !== null && (e.key === 'ArrowUp' || e.key === 'ArrowDown' ||
+                                      e.key === 'ArrowLeft' || e.key === 'ArrowRight')) {
+          e.preventDefault();
+          const step = e.shiftKey ? 0.01745 : 0.08727; // Shift=1°, thường=5°
+          if (e.key === 'ArrowUp' || e.key === 'ArrowDown') {
+            const sign = e.key === 'ArrowUp' ? -1 : 1;
+            const pitchQ = new THREE.Quaternion()
+              .setFromAxisAngle(new THREE.Vector3(0, 0, 1), sign * step);
+            aimingDevice.aimQuat.multiply(pitchQ);
+          } else {
+            const sign = e.key === 'ArrowLeft' ? 1 : -1;
+            const yawQ = new THREE.Quaternion()
+              .setFromAxisAngle(new THREE.Vector3(0, 1, 0), sign * step);
+            aimingDevice.aimQuat.premultiply(yawQ);
+          }
+          aimingDevice.group.quaternion.copy(aimingDevice.aimQuat);
+          aimingDevice.group.updateMatrixWorld(true);
+          const ra = aimingDevice.group.rotation;
+          aimingDevice.rotation = { x: +ra.x.toFixed(4), y: +ra.y.toFixed(4), z: +ra.z.toFixed(4) };
+          rebuildFOVFan(aimingDevice);
+          updateAimHint(aimingDevice);
+          return;
+        }
+        if (aimingDevice !== null && (e.key === 'q' || e.key === 'Q')) {
+          if (!aimingDevice.aimQuat) aimingDevice.aimQuat = aimingDevice.group.quaternion.clone();
+          const rQ = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(1, 0, 0), -0.05);
+          aimingDevice.aimQuat.multiply(rQ);
+          aimingDevice.group.quaternion.copy(aimingDevice.aimQuat);
+          aimingDevice.group.updateMatrixWorld(true);
+          const rr = aimingDevice.group.rotation;
+          aimingDevice.rotation = { x: +rr.x.toFixed(4), y: +rr.y.toFixed(4), z: +rr.z.toFixed(4) };
+          rebuildFOVFan(aimingDevice);
+          updateAimHint(aimingDevice);
+          return;
+        }
+        if (aimingDevice !== null && (e.key === 'e' || e.key === 'E')) {
+          if (!aimingDevice.aimQuat) aimingDevice.aimQuat = aimingDevice.group.quaternion.clone();
+          const rQ = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(1, 0, 0), 0.05);
+          aimingDevice.aimQuat.multiply(rQ);
+          aimingDevice.group.quaternion.copy(aimingDevice.aimQuat);
+          aimingDevice.group.updateMatrixWorld(true);
+          const rr = aimingDevice.group.rotation;
+          aimingDevice.rotation = { x: +rr.x.toFixed(4), y: +rr.y.toFixed(4), z: +rr.z.toFixed(4) };
+          rebuildFOVFan(aimingDevice);
+          updateAimHint(aimingDevice);
+          return;
+        }
+        if (e.key === 'Escape') {
+          if (heightAdjDevice !== null) {
+            heightAdjDevice = null;
+            controls.enabled = true;
+            document.getElementById('height-hint').style.display = 'none';
+            renderer.domElement.style.cursor = 'default';
             autoSave();
+            return;
+          }
+          if (aimingDevice !== null) {
+            hideAimGizmo();
+            aimingDevice = null;
+            aimMouseDown = false;
+            aimDragMoved = false;
+            controls.enabled = true;
+            document.getElementById('aim-hint').style.display = 'none';
+            renderer.domElement.style.cursor = 'default';
+            checkFOVOverlaps(); autoSave();
             return;
           }
           ctxMenu.style.display = 'none';
@@ -1730,6 +1988,11 @@
             rotation:      d.rotation      ?? { x: 0, y: 0, z: 0 },
             fovDirection:  d.fovDirection  ?? 0,
             fovTilt:       d.fovTilt       ?? 0,
+            fovRoll:       d.fovRoll       ?? 0,
+            fovQuat: {
+              x: +d.group.quaternion.x.toFixed(6), y: +d.group.quaternion.y.toFixed(6),
+              z: +d.group.quaternion.z.toFixed(6), w: +d.group.quaternion.w.toFixed(6),
+            },
           }))
         });
       }
@@ -1792,9 +2055,17 @@
             rotation:      entry.rotation      ?? { x: 0, y: 0, z: 0 },
             fovDirection:  entry.fovDirection  ?? 0,
             fovTilt:       entry.fovTilt       ?? 0,
+            fovRoll:       entry.fovRoll       ?? 0,
             baseQuat:      restoredBaseQuat,
           };
           buildFOVCone(device);
+          // Nếu có fovQuat (dữ liệu mới) → khôi phục quaternion chính xác
+          if (entry.fovQuat) {
+            const q = entry.fovQuat;
+            device.group.quaternion.set(q.x, q.y, q.z, q.w);
+            device.group.updateMatrixWorld(true);
+            rebuildFOVFan(device);
+          }
           window.devices.push(device);
           window.floors[entry.floorIndex].devices.push(device.id);
 
@@ -1830,7 +2101,8 @@
 <body>
   <div id="drag-cursor"></div>
   <div id="drop-hint"></div>
-  <div id="aim-hint" style="position:fixed;bottom:60px;left:50%;transform:translateX(-50%);background:rgba(55,138,221,0.9);color:#fff;font-size:12px;padding:7px 18px;border-radius:99px;z-index:50;pointer-events:none;display:none;">Di chuột: hướng ngang &nbsp;|&nbsp; Cuộn chuột: góc lên/xuống &nbsp;|&nbsp; Click: xong &nbsp;|&nbsp; Esc: thoát</div>
+  <div id="aim-hint" style="position:fixed;bottom:60px;left:50%;transform:translateX(-50%);background:rgba(55,138,221,0.92);color:#fff;font-size:13px;font-weight:500;padding:8px 20px;border-radius:99px;z-index:50;pointer-events:none;display:none;box-shadow:0 2px 12px rgba(0,0,0,0.4);">Kéo: xoay | ↑↓: nghiêng | ←→: quay | Q·E/Cuộn: lăn | Shift+phím: chính xác | Click/Esc: xong</div>
+  <div id="height-hint" style="position:fixed;bottom:60px;left:50%;transform:translateX(-50%);background:rgba(34,197,94,0.9);color:#fff;font-size:12px;padding:7px 18px;border-radius:99px;z-index:50;pointer-events:none;display:none;">Cuộn chuột: tăng/giảm độ cao &nbsp;|&nbsp; Click: xong &nbsp;|&nbsp; Esc: thoát</div>
   <div id="tooltip" style="position:absolute;pointer-events:none;display:none;background:#1e1e2e;border:0.5px solid rgba(255,255,255,0.12);border-radius:8px;padding:0;font-size:12px;color:white;line-height:1.6;z-index:100;overflow:hidden;"></div>
   <div id="ctx-menu" style="position:absolute;display:none;background:#1e1e2e;border:0.5px solid rgba(255,255,255,0.12);border-radius:8px;padding:4px 0;font-size:12px;color:white;z-index:200;min-width:140px;"></div>
   <div id="toast-container" style="position:fixed;bottom:24px;left:50%;transform:translateX(-50%);z-index:300;display:flex;flex-direction:column;gap:6px;align-items:center;pointer-events:none;"></div>
